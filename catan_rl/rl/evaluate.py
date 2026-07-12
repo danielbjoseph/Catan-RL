@@ -1,0 +1,141 @@
+"""
+Evaluation harness: trained policy vs scripted bots and past checkpoints.
+
+Evaluation always uses greedy (deterministic) action selection for the
+policy (spec §6: stochastic sampling is for training only).
+"""
+
+from __future__ import annotations
+
+import random
+from pathlib import Path
+from typing import Callable, Dict, Optional, Union
+
+import numpy as np
+import torch
+
+from ..env.action_mask import legal_action_mask
+from ..env.actions import CATALOG
+from ..env.board import BoardConfig
+from ..env.game_state import GameState
+from ..env.observation import make_observation
+from ..env.rules import apply_action
+from ..env.rules_profile import RulesProfile
+from ..env.scoring import compute_vp
+from .checkpointing import load_policy
+from .models import ActorCritic
+
+BotFn = Callable[..., object]  # pick_action(state, rng) -> Action
+
+
+def policy_action(
+    policy: ActorCritic,
+    state: GameState,
+    device: str = "cpu",
+    deterministic: bool = True,
+    obs_mode: str = "self_play",
+) -> int:
+    """Greedy catalog index for the current player of `state`."""
+    obs = make_observation(state, observer=state.current_player, mode=obs_mode)
+    mask = legal_action_mask(state)
+    obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+    mask_t = torch.as_tensor(mask, dtype=torch.bool, device=device).unsqueeze(0)
+    action, _, _ = policy.act(obs_t, mask_t, deterministic=deterministic)
+    return int(action.item())
+
+
+def _play_eval_game(
+    seat_actors,  # list of 4 callables: state, rng -> catalog index int
+    seed: int,
+    profile: RulesProfile,
+    max_turns: int,
+) -> GameState:
+    rng = random.Random(seed)
+    config = BoardConfig.standard(seed=seed)
+    state = GameState.new_game(config, n_players=4, seed=seed, profile=profile)
+    max_plies = max_turns * 20  # generous ply budget per game
+    plies = 0
+    while not state.is_terminal and state.turn_number < max_turns and plies < max_plies:
+        idx = seat_actors[state.current_player](state, rng)
+        apply_action(state, CATALOG[idx], rng)
+        plies += 1
+    return state
+
+
+def _bot_actor(bot_pick_action: BotFn):
+    def actor(state: GameState, rng: random.Random) -> int:
+        return bot_pick_action(state, rng).catalog_index
+    return actor
+
+
+def _policy_actor(policy: ActorCritic, device: str, deterministic: bool = True):
+    def actor(state: GameState, rng: random.Random) -> int:
+        return policy_action(policy, state, device=device, deterministic=deterministic)
+    return actor
+
+
+def evaluate_vs_bots(
+    policy: ActorCritic,
+    bot_pick_action: BotFn,
+    n_games: int = 20,
+    *,
+    rules_profile: Union[str, RulesProfile, None] = "simplified_v1",
+    seed: int = 0,
+    max_turns: int = 500,
+    device: str = "cpu",
+) -> Dict:
+    """Policy on a rotating seat vs three copies of a scripted bot."""
+    profile = RulesProfile.get(rules_profile)
+    policy.eval()
+    wins = 0
+    vps, turns, seats_played = [], [], []
+
+    for i in range(n_games):
+        seat = i % 4
+        actors = [_bot_actor(bot_pick_action)] * 4
+        actors[seat] = _policy_actor(policy, device)
+        state = _play_eval_game(actors, seed=seed + i, profile=profile, max_turns=max_turns)
+        seats_played.append(seat)
+        if state.winner == seat:
+            wins += 1
+        vps.append(compute_vp(seat, state))
+        turns.append(state.turn_number)
+
+    return {
+        "win_rate": wins / n_games,
+        "mean_vp": float(np.mean(vps)),
+        "mean_turns": float(np.mean(turns)),
+        "games": n_games,
+        "seats_played": seats_played,
+    }
+
+
+def evaluate_vs_checkpoint(
+    policy: ActorCritic,
+    checkpoint_path: Union[str, Path],
+    n_games: int = 20,
+    *,
+    rules_profile: Union[str, RulesProfile, None] = "simplified_v1",
+    seed: int = 0,
+    max_turns: int = 500,
+    device: str = "cpu",
+) -> Dict:
+    """Current policy (2 seats) vs an older checkpoint (2 seats), seats rotating."""
+    profile = RulesProfile.get(rules_profile)
+    old_policy, _ = load_policy(checkpoint_path, device=device)
+    policy.eval()
+
+    wins = 0
+    for i in range(n_games):
+        current_seats = {s for s in range(4) if (s + i) % 2 == 0}
+        actors = []
+        for s in range(4):
+            if s in current_seats:
+                actors.append(_policy_actor(policy, device))
+            else:
+                actors.append(_policy_actor(old_policy, device))
+        state = _play_eval_game(actors, seed=seed + i, profile=profile, max_turns=max_turns)
+        if state.winner is not None and state.winner in current_seats:
+            wins += 1
+
+    return {"win_rate": wins / n_games, "games": n_games}
