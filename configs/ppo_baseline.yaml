@@ -1,0 +1,28 @@
+# Baseline PPO self-play run (spec Version 0.1: simplified rules, shared policy).
+# PPO hyperparameters (consumed by PPOConfig; unknown keys ignored there)
+lr: 3.0e-4
+clip_coef: 0.2
+epochs: 4
+minibatch_size: 256
+value_coef: 0.5
+entropy_coef: 0.01
+max_grad_norm: 0.5
+gamma: 0.999
+gae_lambda: 0.95
+hidden_sizes: [512, 512]
+target_kl: null
+
+# Run settings (consumed by SelfPlayTrainer)
+experiment_name: ppo_baseline
+seed: 42
+iterations: 500
+games_per_iteration: 16
+eval_interval: 25          # iterations between eval passes
+eval_games: 12             # games per opponent during eval
+checkpoint_interval: 25    # iterations between checkpoints
+rules_profile: simplified_v1
+max_turns: 500
+reward_win: 1.0
+reward_loss: -1.0
+obs_mode: self_play
+device: cpu
