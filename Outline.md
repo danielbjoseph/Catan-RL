@@ -8,6 +8,25 @@ This is not meant to be a toy demo. It should be structured so that we can start
 
 ---
 
+# 0. Tech stack
+
+The following concrete choices must be used throughout the project. Do not substitute alternatives without updating this section first.
+
+| Concern | Choice |
+|---|---|
+| Language | Python 3.11+ |
+| Deep learning | PyTorch (latest stable) |
+| RL algorithm | Custom PPO — do **not** use stable-baselines3; we need full control over multi-seat trajectory batching |
+| Multi-agent env API | PettingZoo AEC (Agent Environment Cycle) |
+| Gym compatibility | `gymnasium` (not legacy `gym`) |
+| Logging / monitoring | TensorBoard via `torch.utils.tensorboard.SummaryWriter` |
+| Config management | YAML files loaded via PyYAML |
+| Testing | `pytest` with `pytest-cov` for coverage reporting |
+| Serialization | Python `dataclasses` + JSON; no unsafe serialization for game state |
+| Package management | `pip` with a `requirements.txt`; all installs into the project venv |
+
+---
+
 # 1. High-level objective
 
 We want a system that can:
@@ -274,29 +293,35 @@ A superset of Mode B with optional engineered summaries:
 
 ### Action space design
 
-The action space will be difficult if represented naively because Catan has many parameterized actions.
+The action space is a **fixed-size flat catalog of 256 slots**. Every possible (action_type, parameter) combination is assigned a permanent index in this catalog. The policy network always outputs 256 logits. Illegal actions are masked to `-inf` before softmax. Simplified-mode games just have more slots masked.
 
-The recommended approach is a **factored discrete action representation**.
+#### Catalog breakdown (standard board: 54 vertices, 72 edges, 19 hexes, 5 resource types, 4 players)
 
-Example:
+| Action | Slots | Notes |
+|---|---|---|
+| `ROLL_DICE` | 1 | |
+| `END_TURN` | 1 | |
+| `BUILD_ROAD(edge_id)` | 72 | one slot per edge |
+| `BUILD_SETTLEMENT(vertex_id)` | 54 | one slot per vertex |
+| `BUILD_CITY(vertex_id)` | 54 | one slot per vertex |
+| `MOVE_ROBBER(hex_id)` | 19 | shared between 7-roll and knight card |
+| `CHOOSE_STEAL_TARGET(player_id)` | 4 | one slot per seat; masked to players on target hex |
+| `MARITIME_TRADE(give, get)` | 20 | 5 × 4 (no same-resource trade); rate inferred from ports |
+| `DISCARD_RESOURCE(resource)` | 5 | called once per resource unit discarded |
+| `BUY_DEV_CARD` | 1 | |
+| `PLAY_KNIGHT` | 1 | triggers MOVE_ROBBER sub-phase |
+| `PLAY_ROAD_BUILDING` | 1 | triggers two BUILD_ROAD sub-phases |
+| `PLAY_YEAR_OF_PLENTY(res_a, res_b)` | 15 | unordered pairs with repetition: C(5+1,2) = 15 |
+| `PLAY_MONOPOLY(resource)` | 5 | |
+| `PLAY_VICTORY_POINT` | 1 | auto-triggered at win; masked otherwise |
+| *(padding to power of 2)* | 3 | reserved |
+| **Total** | **256** | |
 
-* `action_type`
-* `arg1`
-* `arg2`
-* `arg3`
+The catalog index for each action is a constant defined in `actions.py` at project init. The policy head is always `nn.Linear(hidden_dim, 256)`.
 
-Or alternatively a **flattened enumerated legal action list** generated on each turn.
+#### Sub-phases and re-used slots
 
-### Recommendation
-
-Use **enumerated legal actions per state**.
-
-At each step:
-
-1. generate all legal actions
-2. assign each legal action an index in the current step’s legal list
-3. the policy outputs scores over a fixed large catalog or over padded legal action slots
-4. illegal actions are masked
+Some actions (PLAY_KNIGHT, PLAY_ROAD_BUILDING) put the game into a sub-phase where a different set of slots becomes legal. The environment tracks the current sub-phase in its state and applies the correct mask automatically. The network sees the same 256-slot output regardless of sub-phase; only the mask differs.
 
 This is much easier than trying to encode the entire combinatorial action space in a universal fixed discrete space from day one.
 
@@ -505,6 +530,19 @@ Each acting turn should store:
 
 At episode end, assign final outcome to all seat trajectories appropriately.
 
+### GAE and advantage estimation across interleaved turns (critical implementation note)
+
+In a 4-player game, each seat's trajectory is **not contiguous** — other players act between each of a given seat's turns. This creates a subtle bug if GAE is applied naively across the full game sequence.
+
+The correct approach:
+
+1. **Collect per-seat sub-trajectories separately.** Each seat accumulates its own list of `(obs, action, logprob, value, reward, done)` tuples, appended only when that seat acts.
+2. **GAE is computed independently per seat** after the episode ends, treating each seat's sub-trajectory as its own standalone sequence. There are no "gap" timesteps between a seat's entries.
+3. **Terminal bootstrapping:** at the end of the episode (game over), `done=True` for the acting seat's final transition. All other seats' trajectories also receive `done=True` on their last stored transition, with their final reward set to the game outcome for that seat.
+4. **Do not interleave seats' transitions** into one shared time series before running GAE.
+
+This means the rollout buffer holds four independent trajectory lists per episode, each of variable length (≈ total turns / 4). All four are flattened together for the PPO minibatch update after GAE is computed per-seat.
+
 ### Reward recommendation for shared-policy multiplayer
 
 Use a per-seat episodic reward:
@@ -536,13 +574,43 @@ The coding agent should include:
 
 Even though the main system is one shared policy, evaluation against old checkpoints is important to detect regressions.
 
+### Game throughput target
+
+The environment must be fast enough for RL to be practical. Target: **≥ 500 complete simplified-rule games per hour on CPU** (no GPU required for environment stepping). Measure this with a random-agent benchmark before starting PPO training. If throughput is below target, profile and optimize the engine before adding RL overhead.
+
+### TensorBoard logging requirements
+
+The trainer must log the following scalars to TensorBoard at each update step:
+
+**Training metrics:**
+* `train/policy_loss`
+* `train/value_loss`
+* `train/entropy`
+* `train/approx_kl`
+* `train/clip_fraction`
+* `train/learning_rate`
+
+**Game metrics (logged per rollout batch):**
+* `game/mean_episode_length`
+* `game/win_rate_seat0` through `seat3`
+* `game/mean_vp_at_end`
+* `game/games_completed`
+
+**Evaluation metrics (logged per eval interval):**
+* `eval/win_rate_vs_random`
+* `eval/win_rate_vs_greedy`
+* `eval/win_rate_vs_prev_checkpoint`
+
+Use `torch.utils.tensorboard.SummaryWriter`. Write logs to `runs/<experiment_name>/`. Launch with `tensorboard --logdir runs/`.
+
 ### Acceptance criteria
 
 Phase 4 is complete when:
 
 * four-seat self-play runs
 * one shared policy is updated from all seats
-* training metrics are logged
+* all required TensorBoard metrics are logging
+* environment achieves ≥ 500 games/hour throughput target
 * policy beats random and simple scripted bots consistently in simplified mode
 
 ---

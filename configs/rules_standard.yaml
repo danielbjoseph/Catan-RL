@@ -1,0 +1,4 @@
+# Full standard Catan rules.
+name: standard
+dev_cards_enabled: true
+win_vp: 10
