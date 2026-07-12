@@ -1,0 +1,6 @@
+numpy>=2.0
+torch>=2.9
+tensorboard>=2.16
+PyYAML>=6.0
+pytest>=8.0
+pytest-cov>=5.0

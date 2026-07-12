@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Training artifacts
+runs/
+checkpoints/
+
+# Tooling
+.playwright-mcp/
+
+# OS
+Thumbs.db
+.DS_Store
