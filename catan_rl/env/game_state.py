@@ -62,6 +62,7 @@ class GameState:
     winner: Optional[int] = None
     turn_number: int = 0
     profile: RulesProfile = field(default_factory=lambda: STANDARD)
+    rolled_this_turn: bool = False   # True once dice have been rolled this turn
 
     # Pending state for sub-phases
     pending_steal_hex: Optional[int] = None
@@ -183,6 +184,7 @@ class GameState:
         s.winner = self.winner
         s.turn_number = self.turn_number
         s.profile = self.profile  # immutable, share reference
+        s.rolled_this_turn = self.rolled_this_turn
         s.pending_steal_hex = self.pending_steal_hex
         s.discard_obligations = dict(self.discard_obligations)
         s._setup_forward_idx = self._setup_forward_idx
@@ -207,6 +209,7 @@ class GameState:
             "winner": self.winner,
             "turn_number": self.turn_number,
             "profile": self.profile.to_dict(),
+            "rolled_this_turn": self.rolled_this_turn,
             "pending_steal_hex": self.pending_steal_hex,
             "discard_obligations": {str(k): v for k, v in self.discard_obligations.items()},
             "_setup_forward_idx": self._setup_forward_idx,
@@ -229,6 +232,7 @@ class GameState:
         s.winner = d["winner"]
         s.turn_number = d["turn_number"]
         s.profile = RulesProfile.from_dict(d.get("profile"))
+        s.rolled_this_turn = d.get("rolled_this_turn", False)
         s.pending_steal_hex = d["pending_steal_hex"]
         s.discard_obligations = {int(k): v for k, v in d["discard_obligations"].items()}
         s._setup_forward_idx = d["_setup_forward_idx"]

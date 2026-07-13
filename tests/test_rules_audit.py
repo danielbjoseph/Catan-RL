@@ -10,11 +10,16 @@ cover everyone" rule). This file grows across the rules-audit task series.
 import random
 
 from catan_rl.env.action_mask import legal_action_mask
-from catan_rl.env.actions import DevCard, END_TURN
+from catan_rl.env.actions import (
+    ActionType, DevCard, END_TURN, PLAY_KNIGHT, ROLL_DICE,
+    move_robber_action, steal_action,
+)
 from catan_rl.env.board import BoardConfig, HexType
 from catan_rl.env.game_state import GameState, Phase
 from catan_rl.env.rules import _produce_resources, apply_action
+from catan_rl.env.rules_profile import SIMPLIFIED_V1
 from catan_rl.env.scoring import check_winner
+from catan_rl.env.validators import legal_actions
 from catan_rl.bots.random_bot import pick_action
 
 
@@ -187,3 +192,142 @@ class TestVictoryPointDevCardsAutoCount:
         assert p.public_vp == 4
         assert p.hidden_vp == 6
         assert p.total_vp == 10
+
+
+class TestDevCardBeforeRoll:
+    """Official rule: one dev card may be played at any time during your
+    turn, including before the roll. Knight-before-roll is the strategically
+    important case (unblocks your own hexes before production happens)."""
+
+    def _no_target_hex(self, state) -> int:
+        """A hex the robber isn't already on (safe to move to; _make_state
+        clears all settlements so no hex has adjacent occupied vertices)."""
+        return 0 if state.robber_hex != 0 else 1
+
+    def test_knight_legal_in_roll_phase(self):
+        """A player holding a knight (standard profile) sees PLAY_KNIGHT
+        legal while still in the ROLL phase, before rolling."""
+        state, config = _make_state(seed=0)
+        p0 = state.players[0]
+        p0.dev_cards[int(DevCard.KNIGHT)] = 1
+
+        assert state.phase == Phase.ROLL
+        acts = legal_actions(state)
+        assert any(a.action_type == ActionType.PLAY_KNIGHT for a in acts)
+
+        mask = legal_action_mask(state)
+        assert mask[231], "PLAY_KNIGHT (catalog slot 231) must be legal pre-roll"
+
+    def test_knight_preroll_no_steal_target_returns_to_roll(self):
+        """Playing knight pre-roll with no adjacent opponents: ROLL ->
+        (play knight) -> ROBBER -> back to ROLL, and ROLL_DICE is still
+        required/legal afterward."""
+        state, config = _make_state(seed=0)
+        p0 = state.players[0]
+        p0.dev_cards[int(DevCard.KNIGHT)] = 1
+
+        apply_action(state, PLAY_KNIGHT)
+        assert state.phase == Phase.ROBBER
+        assert p0.has_played_dev_card
+        assert p0.army_size == 1
+
+        apply_action(state, move_robber_action(self._no_target_hex(state)))
+        assert state.phase == Phase.ROLL
+
+        acts = legal_actions(state)
+        assert any(a.action_type == ActionType.ROLL_DICE for a in acts)
+        assert ROLL_DICE in acts
+
+        # Must still be able to roll to finish the turn.
+        apply_action(state, ROLL_DICE, random.Random(0))
+        assert state.rolled_this_turn is True
+
+    def test_knight_preroll_with_steal_target_returns_to_roll(self):
+        """Playing knight pre-roll with an adjacent opponent: ROLL ->
+        ROBBER -> STEAL -> back to ROLL (not MAIN)."""
+        state, config = _make_state(seed=1)
+        geo = config.geometry
+        p0 = state.players[0]
+        p1 = state.players[1]
+        p0.dev_cards[int(DevCard.KNIGHT)] = 1
+        p1.resources = [1, 0, 0, 0, 0]
+
+        hex_id = self._no_target_hex(state)
+        v = geo.hex_to_vertices[hex_id][0]
+        p1.settlement_vertices.add(v)
+
+        apply_action(state, PLAY_KNIGHT)
+        assert state.phase == Phase.ROBBER
+
+        apply_action(state, move_robber_action(hex_id))
+        assert state.phase == Phase.STEAL
+
+        apply_action(state, steal_action(1), random.Random(0))
+        assert state.phase == Phase.ROLL
+
+    def test_knight_postroll_returns_to_main(self):
+        """Playing knight after rolling still returns to MAIN, as before."""
+        state, config = _make_state(seed=0)
+        p0 = state.players[0]
+        p0.dev_cards[int(DevCard.KNIGHT)] = 1
+        state.rolled_this_turn = True
+        state.phase = Phase.MAIN
+
+        apply_action(state, PLAY_KNIGHT)
+        assert state.phase == Phase.ROBBER
+
+        apply_action(state, move_robber_action(self._no_target_hex(state)))
+        assert state.phase == Phase.MAIN
+
+    def test_card_bought_this_turn_not_playable_preroll(self):
+        """A knight bought this turn (still in dev_cards_new) is not
+        playable pre-roll, same gating as MAIN."""
+        state, config = _make_state(seed=0)
+        p0 = state.players[0]
+        p0.dev_cards_new[int(DevCard.KNIGHT)] = 1
+
+        acts = legal_actions(state)
+        assert not any(a.action_type == ActionType.PLAY_KNIGHT for a in acts)
+        assert not legal_action_mask(state)[231]
+
+    def test_preroll_dev_card_play_consumes_one_per_turn_allowance(self):
+        """Playing a dev card pre-roll uses up the one-per-turn allowance:
+        nothing playable in MAIN afterward that same turn."""
+        state, config = _make_state(seed=0)
+        p0 = state.players[0]
+        p0.dev_cards[int(DevCard.KNIGHT)] = 1
+        p0.dev_cards[int(DevCard.MONOPOLY)] = 1
+
+        apply_action(state, PLAY_KNIGHT)
+        assert p0.has_played_dev_card
+        apply_action(state, move_robber_action(self._no_target_hex(state)))
+        assert state.phase == Phase.ROLL
+
+        # Simulate finishing the roll (already exercised end-to-end above);
+        # here we just need to land in MAIN with the allowance already spent.
+        state.rolled_this_turn = True
+        state.phase = Phase.MAIN
+
+        acts = legal_actions(state)
+        dev_play_acts = [
+            a for a in acts
+            if a.action_type in (
+                ActionType.PLAY_KNIGHT, ActionType.PLAY_ROAD_BUILDING,
+                ActionType.PLAY_YEAR_OF_PLENTY, ActionType.PLAY_MONOPOLY,
+            )
+        ]
+        assert dev_play_acts == []
+
+    def test_simplified_v1_roll_phase_only_roll_dice(self):
+        """simplified_v1 has dev cards disabled entirely: ROLL phase offers
+        only ROLL_DICE, even if a card is (artificially) present."""
+        config = BoardConfig.standard(seed=0)
+        state = GameState.new_game(config, n_players=4, seed=0, profile=SIMPLIFIED_V1)
+        state.phase = Phase.ROLL
+        state.current_player = 0
+        state._setup_forward_idx = 4
+        state._setup_backward_idx = -1
+        state.players[0].dev_cards[int(DevCard.KNIGHT)] = 1
+
+        acts = legal_actions(state)
+        assert acts == [ROLL_DICE]

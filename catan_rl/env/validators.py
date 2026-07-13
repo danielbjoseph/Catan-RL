@@ -31,7 +31,11 @@ def legal_actions(state: "GameState") -> List[Action]:
     if phase == Phase.SETUP_ROAD_1 or phase == Phase.SETUP_ROAD_2:
         return _setup_road_actions(state)
     if phase == Phase.ROLL:
-        return [ROLL_DICE]
+        # Official rule: one dev card may be played at any time during your
+        # turn, including before the roll (knight-before-roll unblocks your
+        # own hexes). ROLL_DICE remains mandatory eventually, but is not the
+        # only legal action while a pre-roll dev card play is available.
+        return [ROLL_DICE] + _dev_card_actions(state)
     if phase == Phase.ROBBER:
         return _robber_actions(state)
     if phase == Phase.STEAL:
@@ -194,24 +198,7 @@ def _main_actions(state: "GameState") -> List[Action]:
     actions.extend(_maritime_trade_actions(state))
 
     # Play dev cards
-    if dev_enabled and not player.has_played_dev_card:
-        if player.dev_cards[int(DevCard.KNIGHT)] > 0:
-            actions.append(PLAY_KNIGHT)
-        if player.dev_cards[int(DevCard.ROAD_BUILDING)] > 0:
-            actions.append(PLAY_ROAD_BUILDING)
-        if player.dev_cards[int(DevCard.YEAR_OF_PLENTY)] > 0:
-            for a in Resource:
-                for b in Resource:
-                    if b >= a:
-                        actions.append(year_of_plenty_action(a, b))
-        if player.dev_cards[int(DevCard.MONOPOLY)] > 0:
-            for r in Resource:
-                actions.append(monopoly_action(r))
-        # VICTORY_POINT cards are never played (see PlayerState.hidden_vp) —
-        # they count toward the win condition automatically. Catalog slot
-        # 253 (PLAY_VICTORY_POINT) is intentionally never appended here and
-        # stays permanently masked; the apply_action handler in rules.py is
-        # kept only for backcompat with old recorded traces.
+    actions.extend(_dev_card_actions(state))
 
     actions.append(END_TURN)
     return actions
@@ -220,6 +207,42 @@ def _main_actions(state: "GameState") -> List[Action]:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _dev_card_actions(state: "GameState") -> List[Action]:
+    """Dev card plays currently legal for the current player: gated by
+    profile (dev_cards_enabled), the one-per-turn allowance
+    (has_played_dev_card), and holding the card in `dev_cards` (cards bought
+    this turn live in `dev_cards_new` and are NOT playable yet).
+
+    Shared by both the ROLL phase (official rule: one dev card may be
+    played at any time during your turn, including before the roll) and the
+    MAIN phase.
+    """
+    actions: List[Action] = []
+    player = state.current
+    if not state.profile.dev_cards_enabled or player.has_played_dev_card:
+        return actions
+
+    if player.dev_cards[int(DevCard.KNIGHT)] > 0:
+        actions.append(PLAY_KNIGHT)
+    if player.dev_cards[int(DevCard.ROAD_BUILDING)] > 0:
+        actions.append(PLAY_ROAD_BUILDING)
+    if player.dev_cards[int(DevCard.YEAR_OF_PLENTY)] > 0:
+        for a in Resource:
+            for b in Resource:
+                if b >= a:
+                    actions.append(year_of_plenty_action(a, b))
+    if player.dev_cards[int(DevCard.MONOPOLY)] > 0:
+        for r in Resource:
+            actions.append(monopoly_action(r))
+    # VICTORY_POINT cards are never played (see PlayerState.hidden_vp) —
+    # they count toward the win condition automatically. Catalog slot
+    # 253 (PLAY_VICTORY_POINT) is intentionally never appended here and
+    # stays permanently masked; the apply_action handler in rules.py is
+    # kept only for backcompat with old recorded traces.
+
+    return actions
+
 
 def _connected_road_actions(state: "GameState") -> List[Action]:
     """

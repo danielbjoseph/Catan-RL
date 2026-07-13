@@ -607,6 +607,7 @@ class TestRobber:
             p.city_vertices -= adj_verts
 
         state.phase = Phase.ROBBER
+        state.rolled_this_turn = True  # this scenario is post-roll (7 or post-roll knight)
         apply_action(state, move_robber_action(desert_hex))
 
         # No opponents adjacent, so should skip straight to MAIN
@@ -1006,6 +1007,7 @@ class TestDevCardEffects:
         p.resources = [0] * 5  # no resources — roads should be free
         roads_before = p.roads_built
         state.phase = Phase.MAIN
+        state.rolled_this_turn = True  # already rolled to reach MAIN this turn
 
         apply_action(state, PLAY_ROAD_BUILDING)
         assert state.phase == Phase.ROAD_BUILDING_1

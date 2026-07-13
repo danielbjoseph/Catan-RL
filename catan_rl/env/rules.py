@@ -32,7 +32,7 @@ def apply_action(state: "GameState", action: Action, rng: Optional[random.Random
     if t == ActionType.ROLL_DICE:
         _roll_dice(state, rng)
     elif t == ActionType.END_TURN and state.phase in (Phase.ROAD_BUILDING_1, Phase.ROAD_BUILDING_2):
-        state.phase = Phase.MAIN
+        state.phase = _main_return_phase(state)
     elif t == ActionType.END_TURN:
         _end_turn(state)
     elif t == ActionType.BUILD_ROAD:
@@ -118,9 +118,9 @@ def _build_road(state: "GameState", edge_id: int):
             if player.roads_available >= 1 and _connected_road_actions(state):
                 state.phase = Phase.ROAD_BUILDING_2
             else:
-                state.phase = Phase.MAIN
+                state.phase = _main_return_phase(state)
         else:
-            state.phase = Phase.MAIN
+            state.phase = _main_return_phase(state)
     else:
         player.spend(BUILD_COSTS["road"])
         for r, n in BUILD_COSTS["road"].items():
@@ -182,6 +182,7 @@ def _roll_dice(state: "GameState", rng: random.Random):
     d1 = rng.randint(1, 6)
     d2 = rng.randint(1, 6)
     state.dice = (d1, d2)
+    state.rolled_this_turn = True
     total = d1 + d2
 
     if total == 7:
@@ -250,6 +251,14 @@ def _handle_seven(state: "GameState"):
 # Robber
 # ---------------------------------------------------------------------------
 
+def _main_return_phase(state: "GameState") -> Phase:
+    """Where a turn-action sub-phase (robber/steal/road-building) should
+    return to once resolved: MAIN if dice have already been rolled this
+    turn, otherwise back to ROLL (official rule: one dev card, including a
+    knight, may be played before the roll -- the player still must roll)."""
+    return Phase.MAIN if state.rolled_this_turn else Phase.ROLL
+
+
 def _move_robber(state: "GameState", hex_id: int):
     state.robber_hex = hex_id
     state.pending_steal_hex = hex_id
@@ -267,7 +276,7 @@ def _move_robber(state: "GameState", hex_id: int):
         state.pending_steal_hex = None
         # Return to appropriate phase
         if state.phase == Phase.ROBBER:
-            state.phase = Phase.MAIN
+            state.phase = _main_return_phase(state)
         # (if called from knight, knight handler sets phase)
 
 
@@ -283,7 +292,7 @@ def _steal(state: "GameState", target_player_id: int, rng: random.Random):
         state.current.gain(stolen)
 
     state.pending_steal_hex = None
-    state.phase = Phase.MAIN
+    state.phase = _main_return_phase(state)
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +330,7 @@ def _end_turn(state: "GameState"):
     state.turn_number += 1
     state.current_player = state.turn_number % state.n_players
     state.dice = None
+    state.rolled_this_turn = False
     state.phase = Phase.ROLL
 
 
