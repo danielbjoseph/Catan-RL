@@ -1,0 +1,7 @@
+# Simplified curriculum ruleset (spec Phase 3):
+#   - no development cards (and therefore no largest army)
+#   - no player-to-player trade (base engine has none anyway)
+#   - maritime/bank trades, robber, roads/settlements/cities, longest road kept
+name: simplified_v1
+dev_cards_enabled: false
+win_vp: 10
