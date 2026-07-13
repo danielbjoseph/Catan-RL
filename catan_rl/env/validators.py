@@ -14,7 +14,6 @@ from typing import List, TYPE_CHECKING
 from .actions import (
     Action, Resource, DevCard,
     ROLL_DICE, END_TURN, BUY_DEV_CARD, PLAY_KNIGHT, PLAY_ROAD_BUILDING,
-    PLAY_VICTORY_POINT,
     road_action, settlement_action, city_action, move_robber_action,
     steal_action, maritime_trade_action, discard_action,
     year_of_plenty_action, monopoly_action,
@@ -208,8 +207,11 @@ def _main_actions(state: "GameState") -> List[Action]:
         if player.dev_cards[int(DevCard.MONOPOLY)] > 0:
             for r in Resource:
                 actions.append(monopoly_action(r))
-        if player.dev_cards[int(DevCard.VICTORY_POINT)] > 0:
-            actions.append(PLAY_VICTORY_POINT)
+        # VICTORY_POINT cards are never played (see PlayerState.hidden_vp) —
+        # they count toward the win condition automatically. Catalog slot
+        # 253 (PLAY_VICTORY_POINT) is intentionally never appended here and
+        # stays permanently masked; the apply_action handler in rules.py is
+        # kept only for backcompat with old recorded traces.
 
     actions.append(END_TURN)
     return actions

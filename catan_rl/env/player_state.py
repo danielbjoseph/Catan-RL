@@ -135,7 +135,16 @@ class PlayerState:
 
     @property
     def hidden_vp(self) -> int:
-        return self.played_dev_cards[int(DevCard.VICTORY_POINT)]
+        # VP dev cards are never "played" — they count automatically toward
+        # the win condition as soon as they're held, regardless of whether
+        # they're in hand, newly bought (not yet playable), or (for
+        # backcompat with old traces) recorded as played.
+        vp = int(DevCard.VICTORY_POINT)
+        return (
+            self.dev_cards[vp]
+            + self.dev_cards_new[vp]
+            + self.played_dev_cards[vp]
+        )
 
     @property
     def total_vp(self) -> int:

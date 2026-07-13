@@ -7,9 +7,15 @@ served" bank depletion vs. the official "nobody gets it if the bank can't
 cover everyone" rule). This file grows across the rules-audit task series.
 """
 
+import random
+
+from catan_rl.env.action_mask import legal_action_mask
+from catan_rl.env.actions import DevCard, END_TURN
 from catan_rl.env.board import BoardConfig, HexType
 from catan_rl.env.game_state import GameState, Phase
-from catan_rl.env.rules import _produce_resources
+from catan_rl.env.rules import _produce_resources, apply_action
+from catan_rl.env.scoring import check_winner
+from catan_rl.bots.random_bot import pick_action
 
 
 def _clean_vertex(geo, config, v, hex_id, token):
@@ -121,3 +127,63 @@ class TestBankShortageOnProduction:
         assert state.players[0].resources[int(resource)] == 1
         assert state.players[1].resources[int(resource)] == 2
         assert state.bank[int(resource)] == bank_before[int(resource)] - 3
+
+
+class TestVictoryPointDevCardsAutoCount:
+    """Official rule: VP dev cards are never "played" — they count toward
+    the win condition automatically as soon as they're held, while staying
+    excluded from public VP (visible building-based score)."""
+
+    def test_newly_bought_vp_card_detected_as_winner_on_next_win_check(self):
+        """A player at 9 public VP who receives a VP card (still in
+        dev_cards_new, i.e. bought this turn and not yet "playable") should
+        be declared the winner the next time a win check runs, without ever
+        playing the card."""
+        state, config = _make_state(seed=0)
+        state.phase = Phase.MAIN
+        p = state.players[0]
+        p.settlements_built = 1
+        p.settlement_vertices = {0}
+        p.cities_built = 4
+        p.city_vertices = {1, 2, 3, 4}
+        assert p.public_vp == 9
+
+        assert check_winner(state) is None
+
+        p.receive_dev_card(DevCard.VICTORY_POINT)  # lands in dev_cards_new
+        assert p.dev_cards_new[int(DevCard.VICTORY_POINT)] == 1
+
+        apply_action(state, END_TURN)
+
+        assert state.winner == 0
+        assert state.phase == Phase.GAME_OVER
+
+    def test_play_victory_point_slot_never_legal_over_random_game(self):
+        """Catalog slot 253 (PLAY_VICTORY_POINT) must never appear as a
+        legal action across a full random-legal standard-profile game."""
+        rng = random.Random(0)
+        config = BoardConfig.standard(seed=0)
+        state = GameState.new_game(config, n_players=4, seed=0)
+
+        for _ in range(200):
+            mask = legal_action_mask(state)
+            assert not mask[253], "PLAY_VICTORY_POINT (slot 253) must be permanently masked"
+            if state.phase == Phase.GAME_OVER:
+                break
+            action = pick_action(state, rng)
+            apply_action(state, action, rng)
+
+    def test_public_vp_excludes_vp_cards(self):
+        """public_vp must reflect only settlements/cities; VP dev cards
+        (held, newly bought, or historically played) live in hidden_vp."""
+        state, config = _make_state(seed=0)
+        p = state.players[0]
+        p.settlements_built = 2
+        p.cities_built = 1
+        p.dev_cards[int(DevCard.VICTORY_POINT)] = 3
+        p.dev_cards_new[int(DevCard.VICTORY_POINT)] = 2
+        p.played_dev_cards[int(DevCard.VICTORY_POINT)] = 1
+
+        assert p.public_vp == 4
+        assert p.hidden_vp == 6
+        assert p.total_vp == 10
