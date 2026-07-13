@@ -192,30 +192,42 @@ def _roll_dice(state: "GameState", rng: random.Random):
 
 
 def _produce_resources(state: "GameState", number: int):
-    config = state.config
-    geo = config.geometry
+    """
+    Compute production for all players, then pay out per resource type
+    according to the official bank-shortage rule: if the bank cannot fully
+    supply all players owed a resource type, no player receives that type
+    (unless exactly one player is owed it — they take what's left).
+    """
+    geo, config = state.config.geometry, state.config
+    occupied = state.all_occupied_vertices()
+    owed = [[0] * 5 for _ in range(state.n_players)]   # pid -> per-resource counts
     for hex_id in range(geo.n_hexes):
-        if config.hex_tokens[hex_id] != number:
-            continue
-        if hex_id == state.robber_hex:
+        if config.hex_tokens[hex_id] != number or hex_id == state.robber_hex:
             continue
         hex_type = config.hex_resources[hex_id]
         if hex_type == HexType.DESERT:
             continue
-        res = hex_type.to_resource()
+        r = int(hex_type.to_resource())
         for v in geo.hex_to_vertices[hex_id]:
-            occ = state.all_occupied_vertices()
-            if v not in occ:
+            pid = occupied.get(v)
+            if pid is None:
                 continue
-            pid = occ[v]
-            player = state.players[pid]
-            is_city = v in player.city_vertices
-            count = 2 if is_city else 1
-            available = state.bank[int(res)]
-            actual = min(count, available)
-            if actual > 0:
-                player.gain(res, actual)
-                state.bank[int(res)] -= actual
+            owed[pid][r] += 2 if v in state.players[pid].city_vertices else 1
+    for r in range(5):
+        demanders = [pid for pid in range(state.n_players) if owed[pid][r] > 0]
+        total = sum(owed[pid][r] for pid in demanders)
+        supply = state.bank[r]
+        if not demanders:
+            continue
+        if total <= supply:
+            for pid in demanders:
+                state.players[pid].resources[r] += owed[pid][r]
+            state.bank[r] -= total
+        elif len(demanders) == 1:
+            pid = demanders[0]
+            state.players[pid].resources[r] += supply
+            state.bank[r] = 0
+        # else: shortage with multiple demanders -> nobody paid
 
 
 def _handle_seven(state: "GameState"):
