@@ -75,6 +75,15 @@ python scripts/evaluate_checkpoints.py --run runs/ppo_baseline --games 50 --vs r
 python scripts/render_match.py --ckpt runs/ppo_baseline/checkpoints/ckpt_000500.pt --seat 0 --bots greedy,greedy,greedy,greedy
 ```
 
+## Does it learn?
+
+Verification run on a laptop CPU (config: `configs/ppo_baseline.yaml`,
+`hidden_sizes=[512,512]`, 16 games/iteration): after **20 iterations
+(~17 minutes)** the shared policy's win rate vs the random bot rose from
+0.12 to **0.88**, and it beat its own 10-iterations-earlier checkpoint 75%
+of head-to-head games. Beating the greedy/heuristic bots takes a longer run
+(see the gcloud guide for cheap multi-hour training).
+
 ## Design notes
 
 - **Action space** — a fixed 256-slot catalog (`actions.py`); every
