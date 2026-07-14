@@ -539,3 +539,125 @@ class TestLongestRoadRevocation:
         assert lengths[0] == 5 and lengths[3] == 5, f"setup drifted: {lengths}"
         assert lengths[0] == lengths[3] == max(lengths)
         assert state.longest_road_holder is None
+
+
+# ---------------------------------------------------------------------------
+# Audit evidence tests: rules that were correct but previously untested
+# ---------------------------------------------------------------------------
+
+class TestDevCardDeckAndPurchase:
+    """Official rules: the dev deck has 25 cards (14 knights, 2 road
+    building, 2 year of plenty, 2 monopoly, 5 VP); a dev card costs
+    1 sheep + 1 wheat + 1 ore; no card can be bought once the deck is empty."""
+
+    def test_deck_composition_14_2_2_2_5(self):
+        from collections import Counter
+        from catan_rl.env.game_state import _DEV_DECK
+        counts = Counter(_DEV_DECK)
+        assert counts[DevCard.KNIGHT] == 14
+        assert counts[DevCard.ROAD_BUILDING] == 2
+        assert counts[DevCard.YEAR_OF_PLENTY] == 2
+        assert counts[DevCard.MONOPOLY] == 2
+        assert counts[DevCard.VICTORY_POINT] == 5
+        assert len(_DEV_DECK) == 25
+
+    def test_buy_dev_card_costs_sheep_wheat_ore(self):
+        state, config = _make_state(seed=0)
+        state.phase = Phase.MAIN
+        state.rolled_this_turn = True
+        p = state.players[0]
+        p.resources = [0, 0, 1, 1, 1]  # exact cost
+        bank_before = list(state.bank)
+        deck_before = len(state.dev_deck)
+        assert deck_before > 0
+
+        acts = legal_actions(state)
+        assert any(a.action_type == ActionType.BUY_DEV_CARD for a in acts)
+        apply_action(state, next(a for a in acts if a.action_type == ActionType.BUY_DEV_CARD))
+
+        assert p.resources == [0, 0, 0, 0, 0]
+        assert state.bank[int(Resource.SHEEP)] == bank_before[int(Resource.SHEEP)] + 1
+        assert state.bank[int(Resource.WHEAT)] == bank_before[int(Resource.WHEAT)] + 1
+        assert state.bank[int(Resource.ORE)] == bank_before[int(Resource.ORE)] + 1
+        assert len(state.dev_deck) == deck_before - 1
+        assert sum(p.dev_cards_new) == 1, "bought card must land in dev_cards_new"
+
+    def test_cannot_buy_when_deck_empty(self):
+        state, config = _make_state(seed=0)
+        state.phase = Phase.MAIN
+        state.rolled_this_turn = True
+        state.players[0].resources = [0, 0, 5, 5, 5]
+        state.dev_deck = []
+
+        acts = legal_actions(state)
+        assert not any(a.action_type == ActionType.BUY_DEV_CARD for a in acts)
+
+
+class TestPieceLimits:
+    """Official rules: each player has exactly 15 roads, 5 settlements and
+    4 cities; once all pieces of a kind are on the board, no more of that
+    kind can be built regardless of resources."""
+
+    def test_road_limit_15(self):
+        state, config = _make_state(seed=0)
+        state.phase = Phase.MAIN
+        p = state.players[0]
+        p.road_vertices = {0}
+        p.resources = [5, 5, 0, 0, 0]
+
+        p.roads_built = 14  # control: one piece left -> legal
+        assert any(a.action_type == ActionType.BUILD_ROAD for a in legal_actions(state))
+
+        p.roads_built = 15  # all pieces placed -> illegal
+        assert not any(a.action_type == ActionType.BUILD_ROAD for a in legal_actions(state))
+
+    def test_settlement_limit_5(self):
+        state, config = _make_state(seed=0)
+        state.phase = Phase.MAIN
+        p = state.players[0]
+        p.road_vertices = {0}  # reachable vertices exist and are unoccupied
+        p.resources = [5, 5, 5, 5, 0]
+
+        p.settlements_built = 4  # control
+        assert any(a.action_type == ActionType.BUILD_SETTLEMENT for a in legal_actions(state))
+
+        p.settlements_built = 5
+        assert not any(a.action_type == ActionType.BUILD_SETTLEMENT for a in legal_actions(state))
+
+    def test_city_limit_4(self):
+        state, config = _make_state(seed=0)
+        state.phase = Phase.MAIN
+        p = state.players[0]
+        p.settlement_vertices = {0}
+        p.resources = [0, 0, 0, 5, 5]
+
+        p.cities_built = 3  # control
+        assert any(a.action_type == ActionType.BUILD_CITY for a in legal_actions(state))
+
+        p.cities_built = 4
+        assert not any(a.action_type == ActionType.BUILD_CITY for a in legal_actions(state))
+
+
+class TestRoadBlockedByEnemyBuilding:
+    """Official rule: a road may not be continued past an opponent's
+    settlement or city (the building interrupts the route)."""
+
+    def test_cannot_extend_road_through_enemy_settlement(self):
+        state, config = _make_state(seed=0)
+        geo = config.geometry
+        state.phase = Phase.MAIN
+        p0 = state.players[0]
+        p0.road_vertices = {0}
+        p0.resources = [5, 5, 0, 0, 0]
+
+        va, vb = geo.edge_to_vertices[0]
+        state.players[1].settlement_vertices.add(vb)  # enemy blocks endpoint vb
+
+        legal_edges = {a.edge_id for a in legal_actions(state)
+                       if a.action_type == ActionType.BUILD_ROAD}
+
+        va_edges = {e for e in geo.vertex_to_edges[va] if e != 0}
+        vb_edges = {e for e in geo.vertex_to_edges[vb] if e != 0}
+        assert va_edges <= legal_edges, "open endpoint must remain extendable"
+        assert not (vb_edges & legal_edges), \
+            "edges past the enemy settlement must be illegal"
