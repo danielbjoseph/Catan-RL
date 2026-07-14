@@ -133,7 +133,7 @@ def _steal_actions(state: "GameState") -> List[Action]:
     for v in adjacent_vertices:
         if v in occupied:
             pid = occupied[v]
-            if pid != state.current_player:
+            if pid != state.current_player and state.players[pid].total_resources > 0:
                 targets.add(pid)
     # If no targets (no opponents adjacent), skip steal by returning END_TURN-like empty
     if not targets:

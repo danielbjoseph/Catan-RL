@@ -268,7 +268,8 @@ def _move_robber(state: "GameState", hex_id: int):
     adjacent_vertices = geo.hex_to_vertices[hex_id]
     occupied = state.all_occupied_vertices()
     targets = {occupied[v] for v in adjacent_vertices
-               if v in occupied and occupied[v] != state.current_player}
+               if v in occupied and occupied[v] != state.current_player
+               and state.players[occupied[v]].total_resources > 0}
 
     if targets:
         state.phase = Phase.STEAL

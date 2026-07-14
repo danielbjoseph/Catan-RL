@@ -11,15 +11,15 @@ import random
 
 from catan_rl.env.action_mask import legal_action_mask
 from catan_rl.env.actions import (
-    ActionType, DevCard, END_TURN, PLAY_KNIGHT, ROLL_DICE,
-    move_robber_action, steal_action,
+    ActionType, DevCard, Resource, END_TURN, PLAY_KNIGHT, ROLL_DICE,
+    move_robber_action, settlement_action, steal_action,
 )
 from catan_rl.env.board import BoardConfig, HexType
 from catan_rl.env.game_state import GameState, Phase
 from catan_rl.env.rules import _produce_resources, apply_action
 from catan_rl.env.rules_profile import SIMPLIFIED_V1
-from catan_rl.env.scoring import check_winner
-from catan_rl.env.validators import legal_actions
+from catan_rl.env.scoring import check_winner, compute_longest_road, update_longest_road
+from catan_rl.env.validators import _steal_actions, legal_actions
 from catan_rl.bots.random_bot import pick_action
 
 
@@ -331,3 +331,211 @@ class TestDevCardBeforeRoll:
 
         acts = legal_actions(state)
         assert acts == [ROLL_DICE]
+
+
+class TestStealTargetMustHoldCards:
+    """Official rule: the robber may only steal from a player who is
+    actually holding resource cards. A player with a building adjacent to
+    the robbed hex but zero cards in hand is not a legal steal target, and
+    if that's the *only* adjacent opponent, the STEAL phase is skipped
+    entirely (same as if no opponent were adjacent at all)."""
+
+    def test_move_robber_to_hex_with_only_empty_handed_opponent_skips_steal(self):
+        """(a) The only adjacent opponent holds 0 resources -> no STEAL
+        phase; post-roll, the turn returns straight to MAIN."""
+        state, config = _make_state(seed=0)
+        geo = config.geometry
+        hex_id = 0 if state.robber_hex != 0 else 1
+        v = geo.hex_to_vertices[hex_id][0]
+        state.players[1].settlement_vertices.add(v)
+        state.players[1].resources = [0] * 5
+        state.rolled_this_turn = True
+        state.phase = Phase.ROBBER
+
+        apply_action(state, move_robber_action(hex_id))
+
+        assert state.phase != Phase.STEAL
+        assert state.phase == Phase.MAIN
+        assert state.pending_steal_hex is None
+
+    def test_move_robber_no_target_returns_to_roll_when_preroll(self):
+        """Same scenario, but pre-roll (e.g. knight played before rolling):
+        must return to ROLL, not MAIN, per rolled_this_turn."""
+        state, config = _make_state(seed=0)
+        geo = config.geometry
+        hex_id = 0 if state.robber_hex != 0 else 1
+        v = geo.hex_to_vertices[hex_id][0]
+        state.players[1].settlement_vertices.add(v)
+        state.players[1].resources = [0] * 5
+        state.rolled_this_turn = False
+        state.phase = Phase.ROBBER
+
+        apply_action(state, move_robber_action(hex_id))
+
+        assert state.phase != Phase.STEAL
+        assert state.phase == Phase.ROLL
+
+    def test_steal_actions_excludes_empty_handed_includes_card_holder_same_hex(self):
+        """(b) Two opponents adjacent to the same hex: one holds 0 cards,
+        the other holds cards. _steal_actions must offer only the holder."""
+        state, config = _make_state(seed=0)
+        geo = config.geometry
+        hex_id = 0 if state.robber_hex != 0 else 1
+        vertices = geo.hex_to_vertices[hex_id]
+        v_empty, v_holder = vertices[0], vertices[1]
+        state.players[1].settlement_vertices.add(v_empty)
+        state.players[1].resources = [0] * 5
+        state.players[2].settlement_vertices.add(v_holder)
+        state.players[2].resources = [1, 0, 0, 0, 0]
+        state.pending_steal_hex = hex_id
+        state.phase = Phase.STEAL
+
+        acts = _steal_actions(state)
+        target_pids = {a.player_id for a in acts}
+        assert target_pids == {2}
+
+
+# ---------------------------------------------------------------------------
+# Longest-road revocation
+# ---------------------------------------------------------------------------
+
+def _greedy_road_chain(geo, start_v, length, used_edges, avoid_vertices):
+    """Walk from start_v adding up to `length` unused edges to a straight
+    path, never stepping onto a vertex in avoid_vertices. Mutates
+    used_edges in place. Returns (edges, vertices); board geometry is fixed
+    (independent of seed), so the lengths requested below are known-good."""
+    edges = []
+    vertices = [start_v]
+    current = start_v
+    for _ in range(length):
+        found = False
+        for e in sorted(geo.vertex_to_edges[current]):
+            if e in used_edges:
+                continue
+            va, vb = geo.edge_to_vertices[e]
+            other = vb if va == current else va
+            if other in avoid_vertices:
+                continue
+            edges.append(e)
+            vertices.append(other)
+            used_edges.add(e)
+            current = other
+            found = True
+            break
+        if not found:
+            break
+    return edges, vertices
+
+
+class TestLongestRoadRevocation:
+    """Official rule: longest road is recomputed on every road/settlement
+    change; the holder keeps the card only while still >= LONGEST_ROAD_MIN
+    (5) and unbeaten. If an opponent's settlement splits the holder's road
+    below 5, the card is revoked -- awarded to the unique remaining player
+    at >= 5, or to nobody on a tie / if nobody qualifies."""
+
+    def _split_scenario(self, seed=0):
+        """Build a 4-player board, roads only (no settlements/resources):
+          - player 1: a straight 6-edge chain, split at its 4th vertex
+          - player 0: an independent straight 5-edge chain elsewhere
+          - player 3: an independent straight 5-edge chain elsewhere
+        None of the three chains touch. Returns (state, config, mid_vertex)
+        where mid_vertex is the vertex that splits player 1's chain into
+        two 3-edge halves.
+        """
+        config = BoardConfig.standard(seed=seed)
+        state = GameState.new_game(config, n_players=4, seed=seed)
+        geo = config.geometry
+        for p in state.players:
+            p.settlement_vertices = set()
+            p.city_vertices = set()
+            p.road_vertices = set()
+            p.roads_built = 0
+            p.resources = [0] * 5
+
+        used_edges = set()
+        blocked = set()
+
+        e1, v1 = _greedy_road_chain(geo, 0, 6, used_edges, blocked)
+        assert len(e1) == 6, "geometry changed: 6-edge chain from vertex 0 unavailable"
+        blocked |= set(v1)
+
+        e0, v0 = _greedy_road_chain(geo, 53, 5, used_edges, blocked)
+        assert len(e0) == 5, "geometry changed: 5-edge chain from vertex 53 unavailable"
+        blocked |= set(v0)
+
+        e3, v3 = _greedy_road_chain(geo, 27, 5, used_edges, blocked)
+        assert len(e3) == 5, "geometry changed: 5-edge chain from vertex 27 unavailable"
+        blocked |= set(v3)
+
+        state.players[1].road_vertices = set(e1)
+        state.players[1].roads_built = len(e1)
+        state.players[0].road_vertices = set(e0)
+        state.players[0].roads_built = len(e0)
+        state.players[3].road_vertices = set(e3)
+        state.players[3].roads_built = len(e3)
+
+        mid_v = v1[3]
+        assert mid_v not in v0 and mid_v not in v3
+
+        return state, config, mid_v
+
+    def _split_player1_road(self, state, mid_v):
+        """Player 2 builds a settlement at mid_v, splitting player 1's road
+        (this is the same apply_action path a real settlement build takes,
+        so it exercises the update_longest_road call already wired into
+        _build_settlement)."""
+        state.phase = Phase.MAIN
+        state.current_player = 2
+        state.players[2].resources = [1, 1, 1, 1, 0]
+        apply_action(state, settlement_action(mid_v))
+
+    def test_holder_revoked_below_5_no_other_qualifier(self):
+        """(c) Opponent settlement splits the holder's road below 5; nobody
+        else has >=5 -> holder becomes None."""
+        state, config, mid_v = self._split_scenario(seed=0)
+        state.players[0].road_vertices = set()
+        state.players[0].roads_built = 0
+        state.players[3].road_vertices = set()
+        state.players[3].roads_built = 0
+
+        update_longest_road(state)
+        assert state.longest_road_holder == 1, "setup: player 1 should start as holder"
+        assert compute_longest_road(1, state) == 6
+
+        self._split_player1_road(state, mid_v)
+
+        assert compute_longest_road(1, state) < 5
+        assert state.longest_road_holder is None
+
+    def test_holder_revoked_transfers_to_unique_qualifier(self):
+        """(d) Same split, but player 3 uniquely still has >=5 -> the card
+        transfers to player 3."""
+        state, config, mid_v = self._split_scenario(seed=0)
+        state.players[0].road_vertices = set()
+        state.players[0].roads_built = 0
+        # player 3 keeps its untouched 5-edge chain
+
+        update_longest_road(state)
+        assert state.longest_road_holder == 1, "setup: player 1 should start as holder"
+
+        self._split_player1_road(state, mid_v)
+
+        assert compute_longest_road(1, state) < 5
+        assert compute_longest_road(3, state) >= 5
+        assert state.longest_road_holder == 3
+
+    def test_tie_after_split_nobody_holds_it(self):
+        """(e) No prior holder. Player 2's settlement splits player 1's
+        road (a distractor -- player 1 was never a contender here), while
+        players 0 and 3 are tied at exactly 5, the new maximum. On a tie,
+        nobody gets the card."""
+        state, config, mid_v = self._split_scenario(seed=0)
+        assert state.longest_road_holder is None
+
+        self._split_player1_road(state, mid_v)
+
+        lengths = [compute_longest_road(pid, state) for pid in range(state.n_players)]
+        assert lengths[0] == 5 and lengths[3] == 5, f"setup drifted: {lengths}"
+        assert lengths[0] == lengths[3] == max(lengths)
+        assert state.longest_road_holder is None

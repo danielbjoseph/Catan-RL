@@ -211,17 +211,23 @@ class TestGymWrapper:
         assert done, "Game should complete within step limit"
 
     def test_reward_is_nonzero_at_end(self):
+        # Seeded action RNG (global: the wrapper's opponent policy uses
+        # np.random too). An unseeded run can legitimately truncate at the
+        # turn cap (reward 0), which is not what this test is about.
+        np.random.seed(1)
+        rng = np.random.default_rng(1)
         env = CatanGymEnv()
         obs, info = env.reset(seed=3)
         final_reward = 0.0
-        done = False
+        done = terminated = False
         while not done:
             mask = info["action_mask"]
             legal = np.where(mask)[0]
-            action = int(np.random.choice(legal)) if len(legal) else 0
-            obs, reward, term, trunc, info = env.step(action)
+            action = int(rng.choice(legal)) if len(legal) else 0
+            obs, reward, terminated, trunc, info = env.step(action)
             final_reward = reward
-            done = term or trunc
+            done = terminated or trunc
+        assert terminated, "Seeded game should terminate with a winner, not truncate"
         assert final_reward != 0.0, "Terminal reward should be non-zero"
 
     def test_no_nan_in_gym_obs(self):
