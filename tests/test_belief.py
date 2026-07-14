@@ -145,6 +145,71 @@ def test_monopoly_reconciles_exactly_despite_prior_uncertainty():
     assert tracker.expected(3)[0] == pytest.approx(0.0, abs=1e-6)
 
 
+def test_monopoly_pins_reconciled_column_during_renormalization():
+    """Regression: renormalization after a monopoly must not move the
+    just-reconciled column off ground truth, nor corrupt it via a blanket
+    whole-vector rescale.
+
+    Trace: p0 steals from p1 (introduces hidden-event error in both wood
+    beliefs), p1 then publicly gains 2 ore, then p0 plays monopoly on WOOD.
+    The monopolist's believed vector totals 2.5 after the exact-wood override
+    while their true hand is 2, so a blanket rescale would drag wood from the
+    exact value 2 down to 1.6. The wood column must stay pinned; only the
+    non-reconciled columns may absorb the sum correction.
+    """
+    state = _fresh_state()
+    tracker = BeliefTracker(state)
+
+    # Prime: p1 publicly gains [2, 2, 0, 0, 0].
+    before = state.clone()
+    before.players[1].resources = [2, 2, 0, 0, 0]
+    tracker.on_action(state.clone(), ROLL_DICE, before)
+
+    # p0 steals one hidden card from p1 (truth: it was wood).
+    before.current_player = 0
+    after_steal = before.clone()
+    after_steal.players[0].resources = [1, 0, 0, 0, 0]
+    after_steal.players[1].resources = [1, 2, 0, 0, 0]
+    tracker.on_action(before, steal_action(1), after_steal)
+    # beliefs now: p0 [0.5, 0.5, 0, 0, 0], p1 [1.5, 1.5, 0, 0, 0]
+
+    # p1 publicly gains 2 ore (production) -> p1 ore belief is exact (2.0).
+    after_prod = after_steal.clone()
+    after_prod.players[1].resources = [1, 2, 0, 0, 2]
+    tracker.on_action(after_steal, ROLL_DICE, after_prod)
+    assert tracker.expected(1)[4] == pytest.approx(2.0, abs=1e-6)
+
+    # p0 plays monopoly on WOOD: takes p1's 1 wood -> p0 true [2,0,0,0,0].
+    before_mono = after_prod.clone()
+    before_mono.current_player = 0
+    after_mono = before_mono.clone()
+    after_mono.players[0].resources = [2, 0, 0, 0, 0]
+    after_mono.players[1].resources = [0, 2, 0, 0, 2]
+    tracker.on_action(before_mono, monopoly_action(Resource.WOOD), after_mono)
+
+    # (a) The reconciled column is exactly ground truth for every player.
+    for pid, true_wood in [(0, 2.0), (1, 0.0), (2, 0.0), (3, 0.0)]:
+        assert tracker.expected(pid)[0] == pytest.approx(true_wood, abs=1e-6), (
+            f"player {pid} wood belief not pinned to ground truth"
+        )
+
+    # (b) Sum invariant holds for every player.
+    for pid in range(4):
+        hand = after_mono.players[pid].total_resources
+        assert float(tracker.expected(pid).sum()) == pytest.approx(hand, abs=1e-4)
+
+    # (c) Monopolist's full vector is derivable: hand 2, wood pinned at 2,
+    # so every other column must be exactly 0.
+    assert np.allclose(tracker.expected(0), [2, 0, 0, 0, 0], atol=1e-6)
+
+    # p1's non-reconciled columns absorb the correction but keep their
+    # relative proportions (brick:ore was 1.5:2 before renormalization).
+    # NOTE: no assertion that ore == 2 — residual error in non-reconciled
+    # columns is acceptable table-view behavior.
+    p1 = tracker.expected(1)
+    assert p1[1] / p1[4] == pytest.approx(1.5 / 2.0, abs=1e-4)
+
+
 # ---------------------------------------------------------------------------
 # 4. Discard subtracts proportionally and raises uncertainty
 # ---------------------------------------------------------------------------

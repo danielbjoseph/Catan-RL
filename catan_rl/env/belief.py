@@ -19,9 +19,12 @@ Update dispatch (see spec table):
     reveals the true count of the monopolized resource for every player
     (victims driven to exactly 0, thief's gain publicly counted), the
     tracker overwrites that resource column with ground truth for all
-    players. This is a genuine reconciliation event, but as a documented
-    simplification we do NOT decrement the hidden-mass counter for it (the
-    uncertainty metric stays conservative/elevated).
+    players, and the subsequent renormalization PINS that column: only the
+    non-reconciled columns absorb the sum correction, so the reconciled
+    column stays exact even when it carried residual error from an earlier
+    hidden event. This is a genuine reconciliation event, but as a
+    documented simplification we do NOT decrement the hidden-mass counter
+    for it (the uncertainty metric stays conservative/elevated).
 
 After every update, `expected[pid]` is renormalized (clipped to >= 0, then
 rescaled) so that `expected[pid].sum() == players[pid].total_resources`,
@@ -77,6 +80,10 @@ class BeliefTracker:
         elif t == ActionType.PLAY_MONOPOLY:
             self._apply_public_delta(state_before, state_after)
             self._apply_monopoly_reconciliation(action, state_after)
+            # The reconciled column is ground truth for every player; the
+            # renormalization must not rescale it away from that.
+            self._renormalize(state_after, pinned=int(action.resource))
+            return
         else:
             self._apply_public_delta(state_before, state_after)
 
@@ -114,17 +121,42 @@ class BeliefTracker:
             self.hidden_mass[victim] += 1
             self.hidden_mass[thief] += 1
 
-    def _renormalize(self, state: "GameState") -> None:
+    def _renormalize(self, state: "GameState", pinned: int | None = None) -> None:
+        """Clip beliefs >= 0 and rescale so each player's vector sums to
+        their true (public) hand size.
+
+        With ``pinned=r``, column r has just been set to ground truth for
+        every player (monopoly reconciliation) and must stay exact: the sum
+        correction is distributed across the non-pinned columns only, by
+        scaling them to ``hand - true_r`` (uniform over the 4 non-pinned
+        columns if they sum to ~0 but mass remains).
+        """
         for i in range(self.n_players):
             hand = state.players[i].total_resources
             vec = np.clip(self._expected[i], 0.0, None)
-            total = float(vec.sum())
-            if hand == 0:
-                vec = np.zeros(N_RESOURCES, dtype=np.float32)
-            elif total <= 1e-9:
-                vec = np.full(N_RESOURCES, hand / N_RESOURCES, dtype=np.float32)
+
+            if pinned is None:
+                total = float(vec.sum())
+                if hand == 0:
+                    vec = np.zeros(N_RESOURCES, dtype=np.float32)
+                elif total <= 1e-9:
+                    vec = np.full(N_RESOURCES, hand / N_RESOURCES, dtype=np.float32)
+                else:
+                    vec = vec * (hand / total)
             else:
-                vec = vec * (hand / total)
+                true_r = float(state.players[i].resources[pinned])
+                target = hand - true_r  # >= 0: hand includes the true count
+                others = np.ones(N_RESOURCES, dtype=bool)
+                others[pinned] = False
+                others_total = float(vec[others].sum())
+                if target <= 1e-9:
+                    vec[others] = 0.0
+                elif others_total <= 1e-9:
+                    vec[others] = target / (N_RESOURCES - 1)
+                else:
+                    vec[others] *= target / others_total
+                vec[pinned] = true_r
+
             self._expected[i] = vec.astype(np.float32)
 
     # ------------------------------------------------------------------
