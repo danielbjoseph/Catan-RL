@@ -5,6 +5,7 @@ Tests for realistic + global observation modes.
 from __future__ import annotations
 
 import random
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -27,6 +28,11 @@ from catan_rl.env.rules_profile import STANDARD
 
 SEED = 0
 
+GOLDEN_PATH = Path(__file__).parent / "fixtures" / "golden_observations.npz"
+GOLDEN_SEED = 123
+GOLDEN_PLIES = 60
+GOLDEN_OBSERVER = 1
+
 
 def _play_random(seed=SEED, n_plies=50):
     rng = random.Random(seed)
@@ -41,6 +47,37 @@ def _play_random(seed=SEED, n_plies=50):
         tracker.on_action(before, action, state)
         plies += 1
     return state, tracker
+
+
+def _golden_state():
+    """Deterministic mid-game state recipe shared by the golden-fixture
+    generator and the regression test. Do not change: the stored reference
+    vectors in fixtures/golden_observations.npz were produced from exactly
+    this recipe."""
+    rng = random.Random(GOLDEN_SEED)
+    config = BoardConfig.standard(seed=GOLDEN_SEED)
+    state = GameState.new_game(config, n_players=4, seed=GOLDEN_SEED, profile=STANDARD)
+    for _ in range(GOLDEN_PLIES):
+        if state.is_terminal:
+            break
+        action = pick_action(state, rng)
+        apply_action(state, action, rng)
+    return state
+
+
+def _generate_golden_fixture():
+    """Regenerate the golden fixture. Run manually ONLY when the base
+    observation encoding is intentionally changed:
+
+        .venv/Scripts/python.exe -c "from tests.test_observation_modes import _generate_golden_fixture; _generate_golden_fixture()"
+    """
+    state = _golden_state()
+    GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        GOLDEN_PATH,
+        self_play=make_observation(state, observer=GOLDEN_OBSERVER, mode="self_play"),
+        perfect=make_observation(state, observer=GOLDEN_OBSERVER, mode="perfect"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +102,33 @@ class TestDims:
 # ---------------------------------------------------------------------------
 # 2. Regression: bases must remain byte-identical
 # ---------------------------------------------------------------------------
+
+class TestGoldenVectorRegression:
+    """Compare freshly-computed base observations against STORED reference
+    vectors captured before any mode was added. Catches any drift in the
+    shared self_play/perfect construction path, which same-run prefix
+    comparisons alone cannot (both sides would drift together)."""
+
+    def test_golden_fixture_exists(self):
+        assert GOLDEN_PATH.is_file(), (
+            f"missing golden fixture {GOLDEN_PATH}; regenerate ONLY on an "
+            "intentional base-encoding change via _generate_golden_fixture()"
+        )
+
+    def test_self_play_matches_golden(self):
+        golden = np.load(GOLDEN_PATH)
+        obs = make_observation(_golden_state(), observer=GOLDEN_OBSERVER, mode="self_play")
+        ref = golden["self_play"]
+        assert ref.shape == (OBS_DIM,)
+        assert np.array_equal(obs, ref), "self_play base drifted from stored golden vector"
+
+    def test_perfect_matches_golden(self):
+        golden = np.load(GOLDEN_PATH)
+        obs = make_observation(_golden_state(), observer=GOLDEN_OBSERVER, mode="perfect")
+        ref = golden["perfect"]
+        assert ref.shape == (OBS_DIM_PERFECT,)
+        assert np.array_equal(obs, ref), "perfect base drifted from stored golden vector"
+
 
 class TestRegressionBasesUntouched:
     def test_realistic_prefix_equals_self_play(self):
@@ -207,6 +271,7 @@ class TestErrors:
         with pytest.raises(ValueError):
             obs_dim_for_mode("bogus")
 
-    def test_make_observation_unknown_mode_dim_helper_still_raises(self):
+    def test_make_observation_unknown_mode_raises(self):
+        state, _ = _play_random(seed=7, n_plies=10)
         with pytest.raises(ValueError):
-            obs_dim_for_mode("not_a_mode")
+            make_observation(state, observer=0, mode="bogus")

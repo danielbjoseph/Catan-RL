@@ -171,6 +171,7 @@ def make_observation(
     noise_cfg: optional {"belief_blend": float, "belief_noise": float, "seed": int}
                applied to each opponent's expected-hand vector (realistic mode only)
     """
+    obs_dim_for_mode(mode)  # validate mode; raises ValueError on unknown
     if mode == "realistic" and belief is None:
         raise ValueError("mode='realistic' requires a belief tracker")
     config = state.config
