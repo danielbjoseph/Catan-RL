@@ -195,3 +195,61 @@ def evaluate_vs_checkpoint(
             wins += 1
 
     return {"win_rate": wins / n_games, "games": n_games}
+
+
+def evaluate_policy_vs_policy(
+    policy_a: ActorCritic,
+    mode_a: str,
+    policy_b: ActorCritic,
+    mode_b: str,
+    n_games: int = 20,
+    *,
+    rules_profile: Union[str, RulesProfile, None] = "simplified_v1",
+    seed: int = 0,
+    max_turns: int = 500,
+    noise_cfg_a: Optional[Dict] = None,
+    noise_cfg_b: Optional[Dict] = None,
+    device: str = "cpu",
+) -> Dict:
+    """Two in-memory policies (each own obs mode), 2 seats apiece, seats
+    rotating game to game: game i gives policy_a the seats where
+    (s + i) % 2 == 0."""
+    profile = RulesProfile.get(rules_profile)
+    policy_a.eval()
+    policy_b.eval()
+
+    wins_a = 0
+    wins_b = 0
+    draws = 0
+    for i in range(n_games):
+        a_seats = {s for s in range(4) if (s + i) % 2 == 0}
+        game_seed = seed + i
+        needs_tracker = mode_a == "realistic" or mode_b == "realistic"
+        tracker = _make_tracker(game_seed, profile) if needs_tracker else None
+
+        actors = []
+        for s in range(4):
+            if s in a_seats:
+                actors.append(_policy_actor(
+                    policy_a, device, obs_mode=mode_a, noise_cfg=noise_cfg_a, tracker_ref=tracker,
+                ))
+            else:
+                actors.append(_policy_actor(
+                    policy_b, device, obs_mode=mode_b, noise_cfg=noise_cfg_b, tracker_ref=tracker,
+                ))
+        state = _play_eval_game(
+            actors, seed=game_seed, profile=profile, max_turns=max_turns, tracker=tracker,
+        )
+        if state.winner is None:
+            draws += 1
+        elif state.winner in a_seats:
+            wins_a += 1
+        else:
+            wins_b += 1
+
+    return {
+        "win_rate_a": wins_a / n_games,
+        "win_rate_b": wins_b / n_games,
+        "draws": draws,
+        "games": n_games,
+    }

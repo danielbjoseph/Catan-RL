@@ -5,7 +5,11 @@ import torch
 from catan_rl.bots import random_bot
 from catan_rl.env.observation import obs_dim_for_mode
 from catan_rl.env.rules_profile import RulesProfile
-from catan_rl.rl.evaluate import evaluate_vs_bots, evaluate_vs_checkpoint
+from catan_rl.rl.evaluate import (
+    evaluate_policy_vs_policy,
+    evaluate_vs_bots,
+    evaluate_vs_checkpoint,
+)
 from catan_rl.rl.checkpointing import save_checkpoint
 from catan_rl.rl.models import ActorCritic
 
@@ -75,3 +79,52 @@ def test_evaluate_vs_checkpoint_mixed_modes(tmp_path):
     )
     assert 0.0 <= result["win_rate"] <= 1.0
     assert result["games"] == 2
+
+
+def test_evaluate_policy_vs_policy_cross_mode():
+    """Two random-init policies in different obs modes (global vs realistic)
+    should complete games with sane, bounded win rates."""
+    policy_a = _policy(seed=1, obs_mode="global")
+    policy_b = _policy(seed=2, obs_mode="realistic")
+    result = evaluate_policy_vs_policy(
+        policy_a, "global", policy_b, "realistic",
+        n_games=2, rules_profile=FAST, seed=7, max_turns=400,
+    )
+    assert set(result.keys()) == {"win_rate_a", "win_rate_b", "draws", "games"}
+    assert result["win_rate_a"] + result["win_rate_b"] <= 1.0
+    assert result["games"] == 2
+
+
+def test_evaluate_policy_vs_policy_deterministic():
+    """Same seed and inputs must yield identical results across runs. This
+    also indirectly exercises seat rotation: game 0 gives A seats {0, 2}
+    and game 1 gives A seats {1, 3}, matching evaluate_vs_checkpoint's
+    convention, and determinism confirms the rotation logic is stable
+    rather than randomized."""
+    policy_a = _policy(seed=3, obs_mode="self_play")
+    policy_b = _policy(seed=4, obs_mode="self_play")
+
+    result1 = evaluate_policy_vs_policy(
+        policy_a, "self_play", policy_b, "self_play",
+        n_games=2, rules_profile=FAST, seed=11, max_turns=400,
+    )
+    result2 = evaluate_policy_vs_policy(
+        policy_a, "self_play", policy_b, "self_play",
+        n_games=2, rules_profile=FAST, seed=11, max_turns=400,
+    )
+    assert result1 == result2
+
+
+def test_evaluate_policy_vs_policy_draws_on_truncation():
+    """With max_turns=2 no game can reach a winner, so every game is a draw
+    and both win rates are 0."""
+    policy_a = _policy(seed=5, obs_mode="self_play")
+    policy_b = _policy(seed=6, obs_mode="self_play")
+    result = evaluate_policy_vs_policy(
+        policy_a, "self_play", policy_b, "self_play",
+        n_games=3, rules_profile=FAST, seed=13, max_turns=2,
+    )
+    assert result["draws"] == 3
+    assert result["win_rate_a"] == 0.0
+    assert result["win_rate_b"] == 0.0
+    assert result["games"] == 3

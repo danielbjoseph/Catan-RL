@@ -15,7 +15,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from catan_rl.bots import greedy_bot, heuristic_bot, random_bot
 from catan_rl.rl.checkpointing import list_checkpoints, load_policy
-from catan_rl.rl.evaluate import evaluate_vs_bots, evaluate_vs_checkpoint
+from catan_rl.rl.evaluate import (
+    evaluate_policy_vs_policy,
+    evaluate_vs_bots,
+    evaluate_vs_checkpoint,
+)
 
 BOTS = {
     "random": random_bot.pick_action,
@@ -28,6 +32,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", help="Run directory (evaluates every checkpoint in it)")
     parser.add_argument("--ckpt", help="Single checkpoint path")
+    parser.add_argument("--vs-ckpt", help="Second checkpoint to play --ckpt against "
+                        "(cross-mode policy-vs-policy evaluation; requires --ckpt)")
     parser.add_argument("--games", type=int, default=20)
     parser.add_argument("--vs", default="random,greedy",
                         help="Comma list of: random,greedy,heuristic,prev")
@@ -35,6 +41,9 @@ def main():
     parser.add_argument("--max-turns", type=int, default=500)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
+
+    if args.vs_ckpt and not args.ckpt:
+        parser.error("--vs-ckpt requires --ckpt")
 
     if args.ckpt:
         ckpts = [Path(args.ckpt)]
@@ -47,6 +56,25 @@ def main():
     if not ckpts:
         print("no checkpoints found")
         sys.exit(1)
+
+    if args.vs_ckpt:
+        policy_a, meta_a = load_policy(args.ckpt)
+        policy_b, meta_b = load_policy(args.vs_ckpt)
+        mode_a = meta_a.get("obs_mode", "self_play")
+        mode_b = meta_b.get("obs_mode", "self_play")
+        result = evaluate_policy_vs_policy(
+            policy_a, mode_a, policy_b, mode_b, args.games,
+            rules_profile=args.profile, seed=args.seed, max_turns=args.max_turns,
+        )
+        header = ["ckpt_a", "mode_a", "ckpt_b", "mode_b", "win_rate_a", "win_rate_b", "draws"]
+        row = [
+            Path(args.ckpt).name, mode_a, Path(args.vs_ckpt).name, mode_b,
+            f"{result['win_rate_a']:.2f}", f"{result['win_rate_b']:.2f}",
+            str(result["draws"]),
+        ]
+        print("  ".join(f"{h:>18s}" for h in header))
+        print("  ".join(f"{c:>18s}" for c in row))
+        return
 
     opponents = [o.strip() for o in args.vs.split(",") if o.strip()]
     kwargs = dict(rules_profile=args.profile, seed=args.seed, max_turns=args.max_turns)
