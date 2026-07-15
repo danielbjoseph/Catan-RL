@@ -2,8 +2,13 @@
 Observation generator for the Catan environment.
 
 Modes:
-  "self_play" (Mode B) -- exact self info, public opponent info; OBS_DIM = 1520
-  "perfect"   (Mode A) -- all players' exact info exposed;      OBS_DIM_PERFECT = 1565
+  "self_play"  (Mode B) -- exact self info, public opponent info; OBS_DIM = 1520
+  "perfect"    (Mode A) -- all players' exact info exposed;      OBS_DIM_PERFECT = 1565
+  "realistic"  -- self_play base + noised opponent-hand beliefs, believed
+                  dev-deck composition, and bank; requires a BeliefTracker.
+                  OBS_DIM_REALISTIC = 1549
+  "global"     -- perfect base + exact remaining dev-deck composition and
+                  bank; no tracker needed. OBS_DIM_GLOBAL = 1576
 
 The observation is always encoded relative to the observing player so that a
 shared policy sees a consistent layout regardless of seat position.
@@ -13,7 +18,7 @@ next-clockwise opponents.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
@@ -21,6 +26,7 @@ from .actions import DevCard, Resource
 from .game_state import Phase
 
 if TYPE_CHECKING:
+    from .belief import BeliefTracker
     from .game_state import GameState
 
 # Board constants
@@ -53,6 +59,74 @@ OBS_DIM = (
 # Mode A adds the 3 opponents' private info (15 floats each)
 OBS_DIM_PERFECT = OBS_DIM + 3 * _SEG_SELF_PRIV  # = 1565
 
+# Realistic mode: per opponent, noised expected-hand (5) + uncertainty (1);
+# plus believed dev-deck composition (5) + count (1); plus bank (5).
+_SEG_REALISTIC_OPPONENTS = (_N_PLAYERS - 1) * (_N_RESOURCES + 1)  # 18
+_SEG_DEV_DECK = _N_DEV_CARDS + 1  # 6  composition + remaining count
+_SEG_BANK = _N_RESOURCES  # 5
+OBS_DIM_REALISTIC = OBS_DIM + _SEG_REALISTIC_OPPONENTS + _SEG_DEV_DECK + _SEG_BANK  # = 1549
+
+# Global mode: exact dev-deck composition (5) + count (1); plus bank (5).
+OBS_DIM_GLOBAL = OBS_DIM_PERFECT + _SEG_DEV_DECK + _SEG_BANK  # = 1576
+
+
+def obs_dim_for_mode(mode: str) -> int:
+    """Return the fixed observation dimensionality for a given mode."""
+    if mode == "self_play":
+        return OBS_DIM
+    if mode == "perfect":
+        return OBS_DIM_PERFECT
+    if mode == "realistic":
+        return OBS_DIM_REALISTIC
+    if mode == "global":
+        return OBS_DIM_GLOBAL
+    raise ValueError(f"Unknown observation mode: {mode!r}")
+
+
+def apply_belief_noise(
+    vec: np.ndarray,
+    hand_size: float,
+    blend: float,
+    sigma: float,
+    key: tuple,
+) -> np.ndarray:
+    """Apply belief-blend + Gaussian noise to a per-opponent expected-hand
+    vector, then renormalize back to sum to ``hand_size``.
+
+    key = (seed, turn, observer) -- used to derive a deterministic RNG.
+    If both ``blend`` and ``sigma`` are zero, ``vec`` is returned unchanged
+    (as a copy) so that the "no noise" configuration is bit-exact with the
+    raw tracker output.
+    """
+    vec = np.asarray(vec, dtype=np.float32).copy()
+    if not blend and not sigma:
+        return vec
+
+    n = vec.shape[0]
+    hand_size = float(hand_size)
+
+    if blend:
+        uniform_prior = np.full(n, hand_size / n, dtype=np.float32)
+        vec = (1.0 - blend) * vec + blend * uniform_prior
+
+    if sigma:
+        seed, turn, observer = key
+        rng_seed = (int(seed) * 1_000_003 + int(turn) * 1_009 + int(observer)) % (2 ** 32)
+        rng = np.random.default_rng(rng_seed)
+        std = sigma * np.sqrt(max(hand_size, 1.0)) / 5.0
+        noise = rng.normal(0.0, std, size=n).astype(np.float32)
+        vec = vec + noise
+
+    vec = np.clip(vec, 0.0, None)
+    total = float(vec.sum())
+    if total <= 1e-9:
+        vec = np.full(n, hand_size / n, dtype=np.float32) if hand_size > 0 else np.zeros(n, dtype=np.float32)
+    else:
+        vec = vec * (hand_size / total)
+
+    return vec.astype(np.float32)
+
+
 # Port type codes: 0=none, 1=generic 3:1, 2-6=resource-specific 2:1
 _PT_NONE, _PT_GENERIC = 0, 1
 _PT_RES_OFFSET = 2  # Resource(0..4) + 2 gives port-type index
@@ -79,13 +153,26 @@ def _encode_private(player) -> np.ndarray:
     return v
 
 
-def make_observation(state: "GameState", observer: int, mode: str = "self_play") -> np.ndarray:
+def make_observation(
+    state: "GameState",
+    observer: int,
+    mode: str = "self_play",
+    belief: Optional["BeliefTracker"] = None,
+    noise_cfg: Optional[dict] = None,
+) -> np.ndarray:
     """
     Build a fixed-size float32 observation for the given observer seat.
 
     observer: 0-3 player seat index
-    mode: "self_play" → OBS_DIM=1520; "perfect" → OBS_DIM_PERFECT=1565
+    mode: "self_play" -> OBS_DIM=1520; "perfect" -> OBS_DIM_PERFECT=1565;
+          "realistic" -> OBS_DIM_REALISTIC=1549 (requires `belief`);
+          "global" -> OBS_DIM_GLOBAL=1576
+    belief: required BeliefTracker instance when mode == "realistic"
+    noise_cfg: optional {"belief_blend": float, "belief_noise": float, "seed": int}
+               applied to each opponent's expected-hand vector (realistic mode only)
     """
+    if mode == "realistic" and belief is None:
+        raise ValueError("mode='realistic' requires a belief tracker")
     config = state.config
     geo = config.geometry
 
@@ -185,11 +272,51 @@ def make_observation(state: "GameState", observer: int, mode: str = "self_play")
 
     obs = np.concatenate(parts)
 
-    if mode == "perfect":
+    if mode in ("perfect", "global"):
         extras = []
         for rel_i in range(1, _N_PLAYERS):
             pid = (observer + rel_i) % _N_PLAYERS
             extras.append(_encode_private(state.players[pid]))
         obs = np.concatenate([obs] + extras)
+
+    if mode == "global":
+        deck_comp = np.zeros(_N_DEV_CARDS, dtype=np.float32)
+        for c in state.dev_deck:
+            deck_comp[int(c)] += 1.0
+        deck_block = np.concatenate([
+            deck_comp / 14.0,
+            np.array([len(state.dev_deck) / 25.0], dtype=np.float32),
+        ])
+        bank_block = np.array(
+            [state.bank[r] / 19.0 for r in range(_N_RESOURCES)], dtype=np.float32
+        )
+        obs = np.concatenate([obs, deck_block, bank_block])
+
+    elif mode == "realistic":
+        opp_blocks = []
+        for rel_i in range(1, _N_PLAYERS):
+            pid = (observer + rel_i) % _N_PLAYERS
+            exp_vec = belief.expected(pid)
+            hand_size = float(exp_vec.sum())
+            if noise_cfg is not None:
+                blend = float(noise_cfg.get("belief_blend", 0.0))
+                sigma = float(noise_cfg.get("belief_noise", 0.0))
+                seed = int(noise_cfg.get("seed", 0))
+                key = (seed, state.turn_number, observer)
+                exp_vec = apply_belief_noise(exp_vec, hand_size, blend, sigma, key)
+            unc = belief.uncertainty(pid)
+            opp_blocks.append(exp_vec.astype(np.float32) / 19.0)
+            opp_blocks.append(np.array([unc], dtype=np.float32))
+
+        dev_comp, dev_count = belief.dev_deck_estimate(observer, state)
+        opp_blocks.append(dev_comp / 14.0)
+        opp_blocks.append(np.array([dev_count / 25.0], dtype=np.float32))
+
+        bank_block = np.array(
+            [state.bank[r] / 19.0 for r in range(_N_RESOURCES)], dtype=np.float32
+        )
+        opp_blocks.append(bank_block)
+
+        obs = np.concatenate([obs] + opp_blocks)
 
     return obs
