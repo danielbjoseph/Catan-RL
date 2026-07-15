@@ -23,7 +23,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from ..bots import greedy_bot, random_bot
-from ..env.observation import OBS_DIM, OBS_DIM_PERFECT
+from ..env.observation import obs_dim_for_mode
 from ..env.rules_profile import RulesProfile
 from .checkpointing import latest_checkpoint, load_checkpoint, save_checkpoint
 from .evaluate import evaluate_vs_bots, evaluate_vs_checkpoint
@@ -44,6 +44,8 @@ _RUN_DEFAULTS = {
     "reward_win": 1.0,
     "reward_loss": -1.0,
     "obs_mode": "self_play",
+    "belief_blend": 0.25,
+    "belief_noise": 0.5,
     "device": "cpu",
 }
 
@@ -91,7 +93,7 @@ class SelfPlayTrainer:
                 "hidden_sizes": tuple(self.ppo_cfg.hidden_sizes),
             })
 
-        obs_dim = OBS_DIM if self.cfg["obs_mode"] == "self_play" else OBS_DIM_PERFECT
+        obs_dim = obs_dim_for_mode(self.cfg["obs_mode"])
         self.policy = ActorCritic(obs_dim=obs_dim, hidden_sizes=self.ppo_cfg.hidden_sizes)
         self.trainer = PPOTrainer(self.policy, self.ppo_cfg, device=self.device)
         self.iteration = 0
@@ -126,6 +128,8 @@ class SelfPlayTrainer:
                 obs_mode=self.cfg["obs_mode"],
                 reward_win=float(self.cfg["reward_win"]),
                 reward_loss=float(self.cfg["reward_loss"]),
+                belief_blend=float(self.cfg["belief_blend"]),
+                belief_noise=float(self.cfg["belief_noise"]),
             )
             stats = self.trainer.update(batch)
             elapsed = time.perf_counter() - t0
@@ -169,11 +173,21 @@ class SelfPlayTrainer:
 
     def _evaluate(self, it: int) -> None:
         n = int(self.cfg["eval_games"])
+        obs_mode = self.cfg["obs_mode"]
+        noise_cfg = None
+        if obs_mode == "realistic":
+            noise_cfg = {
+                "belief_blend": float(self.cfg["belief_blend"]),
+                "belief_noise": float(self.cfg["belief_noise"]),
+                "seed": 10_000_000 + it,
+            }
         kwargs = dict(
             rules_profile=self.profile,
             seed=10_000_000 + it,
             max_turns=int(self.cfg["max_turns"]),
             device=self.device,
+            obs_mode=obs_mode,
+            noise_cfg=noise_cfg,
         )
         vs_random = evaluate_vs_bots(self.policy, random_bot.pick_action, n, **kwargs)
         vs_greedy = evaluate_vs_bots(self.policy, greedy_bot.pick_action, n, **kwargs)
@@ -203,6 +217,7 @@ class SelfPlayTrainer:
             self.iteration,
             config=cfg_serializable,
             metrics=metrics,
+            obs_mode=self.cfg["obs_mode"],
         )
         print(f"[ckpt] saved {path}")
 

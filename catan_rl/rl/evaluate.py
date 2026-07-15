@@ -16,6 +16,7 @@ import torch
 
 from ..env.action_mask import legal_action_mask
 from ..env.actions import CATALOG
+from ..env.belief import BeliefTracker
 from ..env.board import BoardConfig
 from ..env.game_state import GameState
 from ..env.observation import make_observation
@@ -34,9 +35,14 @@ def policy_action(
     device: str = "cpu",
     deterministic: bool = True,
     obs_mode: str = "self_play",
+    belief: Optional[BeliefTracker] = None,
+    noise_cfg: Optional[Dict] = None,
 ) -> int:
     """Greedy catalog index for the current player of `state`."""
-    obs = make_observation(state, observer=state.current_player, mode=obs_mode)
+    obs = make_observation(
+        state, observer=state.current_player, mode=obs_mode,
+        belief=belief, noise_cfg=noise_cfg,
+    )
     mask = legal_action_mask(state)
     obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
     mask_t = torch.as_tensor(mask, dtype=torch.bool, device=device).unsqueeze(0)
@@ -49,6 +55,7 @@ def _play_eval_game(
     seed: int,
     profile: RulesProfile,
     max_turns: int,
+    tracker: Optional[BeliefTracker] = None,
 ) -> GameState:
     rng = random.Random(seed)
     config = BoardConfig.standard(seed=seed)
@@ -57,7 +64,13 @@ def _play_eval_game(
     plies = 0
     while not state.is_terminal and state.turn_number < max_turns and plies < max_plies:
         idx = seat_actors[state.current_player](state, rng)
-        apply_action(state, CATALOG[idx], rng)
+        action = CATALOG[idx]
+        if tracker is not None:
+            before = state.clone()
+            apply_action(state, action, rng)
+            tracker.on_action(before, action, state)
+        else:
+            apply_action(state, action, rng)
         plies += 1
     return state
 
@@ -68,10 +81,31 @@ def _bot_actor(bot_pick_action: BotFn):
     return actor
 
 
-def _policy_actor(policy: ActorCritic, device: str, deterministic: bool = True):
+def _policy_actor(
+    policy: ActorCritic,
+    device: str,
+    deterministic: bool = True,
+    obs_mode: str = "self_play",
+    noise_cfg: Optional[Dict] = None,
+    tracker_ref: Optional[BeliefTracker] = None,
+):
     def actor(state: GameState, rng: random.Random) -> int:
-        return policy_action(policy, state, device=device, deterministic=deterministic)
+        return policy_action(
+            policy, state, device=device, deterministic=deterministic,
+            obs_mode=obs_mode, belief=tracker_ref, noise_cfg=noise_cfg,
+        )
     return actor
+
+
+def _make_tracker(game_seed: int, profile: RulesProfile) -> BeliefTracker:
+    """A fresh BeliefTracker anchored to a game's initial (all-zero-hand)
+    state. Constructed independently of `_play_eval_game`'s own state so it
+    can be handed to the policy actors before the game state exists; a fresh
+    game's opening hands are always zero regardless of board layout, so this
+    matches the tracker `_play_eval_game` would have anchored internally."""
+    config = BoardConfig.standard(seed=game_seed)
+    init_state = GameState.new_game(config, n_players=4, seed=game_seed, profile=profile)
+    return BeliefTracker(init_state)
 
 
 def evaluate_vs_bots(
@@ -83,6 +117,8 @@ def evaluate_vs_bots(
     seed: int = 0,
     max_turns: int = 500,
     device: str = "cpu",
+    obs_mode: str = "self_play",
+    noise_cfg: Optional[Dict] = None,
 ) -> Dict:
     """Policy on a rotating seat vs three copies of a scripted bot."""
     profile = RulesProfile.get(rules_profile)
@@ -92,9 +128,15 @@ def evaluate_vs_bots(
 
     for i in range(n_games):
         seat = i % 4
+        game_seed = seed + i
+        tracker = _make_tracker(game_seed, profile) if obs_mode == "realistic" else None
         actors = [_bot_actor(bot_pick_action)] * 4
-        actors[seat] = _policy_actor(policy, device)
-        state = _play_eval_game(actors, seed=seed + i, profile=profile, max_turns=max_turns)
+        actors[seat] = _policy_actor(
+            policy, device, obs_mode=obs_mode, noise_cfg=noise_cfg, tracker_ref=tracker,
+        )
+        state = _play_eval_game(
+            actors, seed=game_seed, profile=profile, max_turns=max_turns, tracker=tracker,
+        )
         seats_played.append(seat)
         if state.winner == seat:
             wins += 1
@@ -119,22 +161,36 @@ def evaluate_vs_checkpoint(
     seed: int = 0,
     max_turns: int = 500,
     device: str = "cpu",
+    obs_mode: str = "self_play",
+    noise_cfg: Optional[Dict] = None,
 ) -> Dict:
-    """Current policy (2 seats) vs an older checkpoint (2 seats), seats rotating."""
+    """Current policy (2 seats, `obs_mode`) vs an older checkpoint (2 seats,
+    its own stored obs_mode from checkpoint metadata), seats rotating."""
     profile = RulesProfile.get(rules_profile)
-    old_policy, _ = load_policy(checkpoint_path, device=device)
+    old_policy, old_meta = load_policy(checkpoint_path, device=device)
+    old_obs_mode = old_meta.get("obs_mode", "self_play")
     policy.eval()
 
     wins = 0
     for i in range(n_games):
         current_seats = {s for s in range(4) if (s + i) % 2 == 0}
+        game_seed = seed + i
+        needs_tracker = obs_mode == "realistic" or old_obs_mode == "realistic"
+        tracker = _make_tracker(game_seed, profile) if needs_tracker else None
+
         actors = []
         for s in range(4):
             if s in current_seats:
-                actors.append(_policy_actor(policy, device))
+                actors.append(_policy_actor(
+                    policy, device, obs_mode=obs_mode, noise_cfg=noise_cfg, tracker_ref=tracker,
+                ))
             else:
-                actors.append(_policy_actor(old_policy, device))
-        state = _play_eval_game(actors, seed=seed + i, profile=profile, max_turns=max_turns)
+                actors.append(_policy_actor(
+                    old_policy, device, obs_mode=old_obs_mode, noise_cfg=noise_cfg, tracker_ref=tracker,
+                ))
+        state = _play_eval_game(
+            actors, seed=game_seed, profile=profile, max_turns=max_turns, tracker=tracker,
+        )
         if state.winner is not None and state.winner in current_seats:
             wins += 1
 

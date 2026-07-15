@@ -23,6 +23,7 @@ from catan_rl.env.observation import (
     make_observation,
     obs_dim_for_mode,
 )
+from catan_rl.env.pettingzoo_env import CatanAECEnv
 from catan_rl.env.rules import apply_action
 from catan_rl.env.rules_profile import STANDARD
 
@@ -275,3 +276,85 @@ class TestErrors:
         state, _ = _play_random(seed=7, n_plies=10)
         with pytest.raises(ValueError):
             make_observation(state, observer=0, mode="bogus")
+
+
+# ---------------------------------------------------------------------------
+# 7. AEC env plumbing for all four observation modes
+# ---------------------------------------------------------------------------
+
+def _random_legal_action(env: CatanAECEnv, rng: random.Random, agent: str):
+    mask = env.observe(agent)["action_mask"]
+    legal = np.where(mask)[0]
+    if len(legal) == 0:
+        return None
+    return int(rng.choice(legal))
+
+
+class TestAECEnvObservationModes:
+    @pytest.mark.parametrize("mode", ["self_play", "perfect", "realistic", "global"])
+    def test_random_plies_correct_dims_no_nans(self, mode):
+        env = CatanAECEnv(obs_mode=mode, rules_profile=STANDARD)
+        env.reset(seed=5)
+        rng = random.Random(5)
+        expected_dim = obs_dim_for_mode(mode)
+
+        plies = 0
+        while plies < 150 and not (
+            all(env.terminations.values()) or all(env.truncations.values())
+        ):
+            agent = env.agent_selection
+            obs_dict = env.observe(agent)
+            obs = obs_dict["observation"]
+            assert obs.shape == (expected_dim,)
+            assert np.all(np.isfinite(obs))
+
+            action = _random_legal_action(env, rng, agent)
+            if action is None:
+                break
+            env.step(action)
+            plies += 1
+
+        assert plies >= 100, f"expected at least 100 plies, only got {plies}"
+
+    def test_realistic_env_owns_a_belief_tracker(self):
+        env = CatanAECEnv(obs_mode="realistic", rules_profile=STANDARD)
+        env.reset(seed=5)
+        assert env._belief is not None
+
+        rng = random.Random(5)
+        for _ in range(30):
+            agent = env.agent_selection
+            action = _random_legal_action(env, rng, agent)
+            if action is None:
+                break
+            env.step(action)
+        # A well-formed BeliefTracker still answers queries after several steps.
+        assert env._belief.expected(0).shape == (5,)
+
+    @pytest.mark.parametrize("mode", ["self_play", "perfect", "global"])
+    def test_non_realistic_modes_do_not_own_a_tracker(self, mode):
+        env = CatanAECEnv(obs_mode=mode, rules_profile=STANDARD)
+        env.reset(seed=5)
+        assert env._belief is None
+
+    def test_realistic_observations_differ_between_observers_same_ply(self):
+        """Rotation sanity: two different observers at the same ply must not
+        see byte-identical vectors (self-private + belief blocks differ)."""
+        env = CatanAECEnv(obs_mode="realistic", rules_profile=STANDARD)
+        env.reset(seed=5)
+        rng = random.Random(5)
+        plies = 0
+        while plies < 40 and not (
+            all(env.terminations.values()) or all(env.truncations.values())
+        ):
+            agent = env.agent_selection
+            action = _random_legal_action(env, rng, agent)
+            if action is None:
+                break
+            env.step(action)
+            plies += 1
+
+        obs0 = env.observe("player_0")["observation"]
+        obs1 = env.observe("player_1")["observation"]
+        assert obs0.shape == obs1.shape == (OBS_DIM_REALISTIC,)
+        assert not np.array_equal(obs0, obs1)

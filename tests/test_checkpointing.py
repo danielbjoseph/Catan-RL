@@ -67,6 +67,25 @@ def test_load_policy_reconstructs_arch(tmp_path):
     assert torch.allclose(a, b)
 
 
+def test_obs_mode_metadata_round_trip(tmp_path):
+    policy, opt = _make(seed=4)
+    path = save_checkpoint(
+        tmp_path, policy, opt, iteration=2,
+        config={}, metrics={}, obs_mode="realistic",
+    )
+    _, meta = load_policy(path)
+    assert meta["obs_mode"] == "realistic"
+    sidecar = json.loads(path.with_suffix(".json").read_text())
+    assert sidecar["obs_mode"] == "realistic"
+
+
+def test_obs_mode_defaults_to_self_play(tmp_path):
+    policy, opt = _make(seed=5)
+    path = save_checkpoint(tmp_path, policy, opt, 3, {}, {})
+    _, meta = load_policy(path)
+    assert meta["obs_mode"] == "self_play"
+
+
 def test_latest_and_list(tmp_path):
     policy, opt = _make()
     p1 = save_checkpoint(tmp_path, policy, opt, 1, {}, {})

@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-from .observation import OBS_DIM, OBS_DIM_PERFECT
+from .observation import obs_dim_for_mode
 from .actions import CATALOG_SIZE
 from .pettingzoo_env import CatanAECEnv
 
@@ -51,6 +51,8 @@ class CatanGymEnv:
         reward_loss: float = -1.0,
         max_turns: int = 500,
         rules_profile=None,
+        belief_blend: float = 0.25,
+        belief_noise: float = 0.5,
     ):
         self._aec = CatanAECEnv(
             obs_mode=obs_mode,
@@ -58,9 +60,11 @@ class CatanGymEnv:
             reward_loss=reward_loss,
             max_turns=max_turns,
             rules_profile=rules_profile,
+            belief_blend=belief_blend,
+            belief_noise=belief_noise,
         )
         self._opponent_policy = opponent_policy or _random_legal_policy
-        self.obs_dim = OBS_DIM if obs_mode == "self_play" else OBS_DIM_PERFECT
+        self.obs_dim = obs_dim_for_mode(obs_mode)
         self.action_space_size = CATALOG_SIZE
         self._controlled_agent: Optional[str] = None
 

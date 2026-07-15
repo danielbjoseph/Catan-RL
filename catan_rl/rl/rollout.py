@@ -97,6 +97,8 @@ def collect_rollouts(
     obs_mode: str = "self_play",
     reward_win: float = 1.0,
     reward_loss: float = -1.0,
+    belief_blend: float = 0.25,
+    belief_noise: float = 0.5,
 ) -> Batch:
     """Play n_games of 4-seat self-play with a single shared policy."""
     env = CatanAECEnv(
@@ -105,6 +107,8 @@ def collect_rollouts(
         reward_loss=reward_loss,
         max_turns=max_turns,
         rules_profile=rules_profile,
+        belief_blend=belief_blend,
+        belief_noise=belief_noise,
     )
 
     all_obs, all_masks, all_actions = [], [], []

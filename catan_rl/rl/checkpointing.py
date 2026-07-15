@@ -37,6 +37,7 @@ def save_checkpoint(
     iteration: int,
     config: Dict,
     metrics: Dict,
+    obs_mode: str = "self_play",
 ) -> Path:
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -47,6 +48,7 @@ def save_checkpoint(
         "config": config,
         "metrics": metrics,
         "arch": _arch_of(policy),
+        "obs_mode": obs_mode,
         "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "torch_version": str(torch.__version__),
     }
