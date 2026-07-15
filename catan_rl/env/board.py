@@ -134,6 +134,9 @@ class BoardGeometry:
     edge_to_hexes:   Dict[int, List[int]]          # edge -> [hex_ids]
     coord_to_hex:    Dict[Tuple[int, int], int]    # (q,r) -> hex_id
 
+    vertex_positions: Tuple[Tuple[float, float], ...]  # (x, y) for vertex i
+    hex_centers: Tuple[Tuple[float, float], ...]       # (x, y) for hex i
+
     @classmethod
     def build(cls) -> BoardGeometry:
         coords = _HEX_COORDS
@@ -157,11 +160,18 @@ class BoardGeometry:
             pos_to_vid[pos] = vid
         n_vertices = len(sorted_positions)
 
-        # Build hex_to_vertices
+        # Build hex_to_vertices, tracking a higher-precision raw position per
+        # vertex id (the dedup keys above are rounded to 5 decimals, which is
+        # too coarse for drawing geometry consumers that need hex-center
+        # precision; the 6-decimal raw positions agree across sharing hexes).
         hex_to_vertices: Dict[int, List[int]] = {}
+        raw_pos_by_vid: Dict[int, Tuple[float, float]] = {}
         for hi, (q, r) in enumerate(coords):
             verts = hex_raw_vertices[hi]
-            hex_to_vertices[hi] = [pos_to_vid[_round_pos(p)] for p in verts]
+            vids = [pos_to_vid[_round_pos(p)] for p in verts]
+            hex_to_vertices[hi] = vids
+            for vid, p in zip(vids, verts):
+                raw_pos_by_vid.setdefault(vid, p)
 
         # Build edges: each edge is a frozenset of two adjacent vertices on same hex
         edge_set: Dict[FrozenSet[int], int] = {}
@@ -216,6 +226,8 @@ class BoardGeometry:
             edge_to_vertices=edge_to_vertices,
             edge_to_hexes=edge_to_hexes,
             coord_to_hex=coord_to_hex,
+            vertex_positions=tuple(raw_pos_by_vid[vid] for vid in range(n_vertices)),
+            hex_centers=tuple(_hex_center(q, r) for q, r in coords),
         )
 
     def hex_neighbors(self, hex_id: int) -> List[int]:
