@@ -141,6 +141,19 @@ def test_list_traces_for_missing_run_is_404(client):
     assert resp.status_code == 404
 
 
+def test_list_traces_skips_corrupt_trace_file(client, runs_dir):
+    bad_path = runs_dir / "run_a" / "traces" / "bad.json"
+    with open(bad_path, "w", encoding="utf-8") as f:
+        f.write("{not json")
+
+    resp = client.get("/api/traces/run_a")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    by_file = {t["file"]: t for t in data}
+    assert "bad.json" not in by_file
+    assert {"game0000.json", "iter0000_game0001.json"} <= set(by_file)
+
+
 # ---------------------------------------------------------------------------
 # GET /api/trace/<run>/<file>
 # ---------------------------------------------------------------------------
@@ -190,3 +203,44 @@ def test_safe_path_helper_rejects_dotdot_segment(runs_dir):
 def test_traversal_in_traces_list_run_is_rejected(client):
     resp = client.get("/api/traces/..%2f..%2f")
     assert resp.status_code in (400, 404)
+
+
+# ---------------------------------------------------------------------------
+# Backslash traversal (%5c) -- these reach the view function (unlike the
+# %2f tests above, which werkzeug 404s at routing before any handler code
+# runs) so they actually exercise `_safe_path` / `_is_safe_segment`.
+# ---------------------------------------------------------------------------
+
+def test_backslash_traversal_in_file_position_is_rejected_and_does_not_leak(client):
+    # run_a/traces/../../secret.json resolves to <runs_dir>/secret.json,
+    # which is planted by the `runs_dir` fixture as a sibling of run_a/run_b.
+    resp = client.get("/api/trace/run_a/..%5c..%5csecret.json")
+    assert resp.status_code in (400, 404)
+    assert b'"secret": true' not in resp.data.lower()
+    assert resp.get_json() != {"secret": True}
+
+
+def test_backslash_traversal_cannot_cross_into_another_run(client):
+    # run_a/traces/../../run_b/traces/game0000.json resolves into run_b's
+    # traces dir -- must not be reachable through run_a's URL.
+    resp = client.get("/api/trace/run_a/..%5c..%5crun_b%5ctraces%5cgame0000.json")
+    assert resp.status_code in (400, 404)
+
+
+def test_backslash_traversal_in_run_position_is_rejected(client):
+    resp = client.get("/api/trace/..%5c..%5csecret.json/whatever.json")
+    assert resp.status_code in (400, 404)
+
+
+def test_backslash_traversal_in_traces_list_run_is_rejected(client):
+    resp = client.get("/api/traces/..%5c..%5c")
+    assert resp.status_code in (400, 404)
+
+
+def test_is_safe_segment_rejects_bad_segments():
+    from catan_rl.dashboard.app import _is_safe_segment
+
+    for bad in ("..", r"a\b", "a/b", "C:x", ""):
+        assert _is_safe_segment(bad) is False, bad
+    assert _is_safe_segment("game0000.json") is True
+    assert _is_safe_segment("run_a") is True

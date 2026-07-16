@@ -9,9 +9,12 @@ plus the static frontend built in a later task. Routes:
   GET /api/traces/<run>       -> [{"file", "turns", "winner", "seats"}, ...]
   GET /api/trace/<run>/<file> -> full trace JSON
 
-All filesystem paths built from URL segments are resolved and checked against
-`runs_dir` with `Path.is_relative_to` before being touched, so `..` segments
-(and other escapes) get a 400 rather than reading outside the run directory.
+Every URL segment used to build a filesystem path is first validated as a
+single, clean path component (no slash, backslash, "..", drive letters,
+etc. -- see `_is_safe_segment`), then the joined path is resolved and re-checked
+against `runs_dir` (and, per-handler, against the specific parent
+directory it's expected to live in) before being touched. Malformed or
+escaping segments get a 400 rather than reading outside the run directory.
 """
 
 from __future__ import annotations
@@ -27,12 +30,50 @@ DEFAULT_SEATS = [f"player_{i}" for i in range(4)]
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _is_safe_segment(segment: str) -> bool:
+    """True iff `segment` is a single, unremarkable path component.
+
+    Rejects empty strings, null bytes, embedded separators (``/`` or
+    ``\\``), ``.``/``..``, and anything with a drive/anchor (e.g. ``C:x``)
+    or that otherwise doesn't collapse to exactly one path part.
+
+    This matters on Windows because Werkzeug only splits the request URL
+    on literal ``/``, so a `%5c`-encoded segment arrives at the view
+    function as a single string containing a backslash. WindowsPath then
+    treats that backslash as a directory separator, so a naive
+    resolve()+containment check (which only guards against escaping
+    `base` as a whole) can still
+    let one URL segment smuggle in several path components and traverse
+    between run directories. Rejecting anything but a clean single
+    component closes that off before a path is ever built.
+    """
+    if not segment or "\x00" in segment:
+        return False
+    if "/" in segment or "\\" in segment:
+        return False
+    if segment in (".", ".."):
+        return False
+    p = Path(segment)
+    if p.is_absolute() or p.anchor:
+        return False
+    if len(p.parts) != 1:
+        return False
+    return True
+
+
 def _safe_path(base: Path, *parts: str) -> Optional[Path]:
     """Resolve base/parts and return it iff still inside resolved base.
 
-    Returns None if the resulting path escapes `base` (e.g. via a ".."
-    segment), so callers can turn that into a 400 response.
+    Every element of `parts` must be a single, clean path component (see
+    `_is_safe_segment`) -- otherwise this returns None immediately. As
+    defense in depth, the joined path is also resolved and re-checked
+    against `base` (e.g. in case a symlink under `base` points outside
+    it), so callers can turn either failure into a 400 response.
     """
+    for part in parts:
+        if not _is_safe_segment(part):
+            return None
+
     base = Path(base).resolve()
     candidate = base
     for part in parts:
@@ -95,18 +136,26 @@ def create_app(runs_dir) -> Flask:
     @app.get("/api/traces/<run>")
     def list_traces(run):
         run_dir = _safe_path(runs_dir, run)
-        if run_dir is None:
+        if run_dir is None or run_dir.parent != Path(runs_dir).resolve():
             abort(400)
         traces_dir = run_dir / "traces"
         if not traces_dir.is_dir():
             abort(404)
-        summaries = [_trace_summary(f) for f in sorted(traces_dir.glob("*.json"))]
+        summaries = []
+        for f in sorted(traces_dir.glob("*.json")):
+            try:
+                summaries.append(_trace_summary(f))
+            except (json.JSONDecodeError, KeyError, TypeError, IndexError, OSError):
+                continue
         return jsonify(summaries)
 
     @app.get("/api/trace/<run>/<file>")
     def get_trace(run, file):
+        traces_dir = _safe_path(runs_dir, run, "traces")
+        if traces_dir is None:
+            abort(400)
         path = _safe_path(runs_dir, run, "traces", file)
-        if path is None:
+        if path is None or path.parent != traces_dir:
             abort(400)
         if not path.is_file():
             abort(404)
