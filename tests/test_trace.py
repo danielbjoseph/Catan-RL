@@ -8,7 +8,7 @@ import pytest
 from catan_rl.bots import greedy_bot
 from catan_rl.env.action_mask import legal_action_mask
 from catan_rl.env.board import BoardConfig, BoardGeometry
-from catan_rl.env.game_state import GameState
+from catan_rl.env.game_state import GameState, Phase
 from catan_rl.env.rules import apply_action
 from catan_rl.env.rules_profile import SIMPLIFIED_V1
 from catan_rl.env.trace import TraceRecorder
@@ -52,11 +52,17 @@ def played_game():
     recorder.start(state, {"seed": SEED, "note": "test game"})
     initial_state_dict = state.to_dict()
 
+    ground_truth = []  # (current_player, phase.name) captured before each apply_action
+    first_ply_bank_snapshot = None
+
     plies = 0
     while not state.is_terminal and plies < MAX_PLIES:
+        ground_truth.append((state.current_player, state.phase.name))
         action = greedy_bot.pick_action(state, rng)
         apply_action(state, action, rng)
         recorder.record(action, state)
+        if first_ply_bank_snapshot is None:
+            first_ply_bank_snapshot = list(state.bank)
         plies += 1
 
     assert state.is_terminal, "seeded greedy game did not finish"
@@ -65,6 +71,8 @@ def played_game():
         "final_state": state,
         "config": config,
         "initial_state_dict": initial_state_dict,
+        "ground_truth": ground_truth,
+        "first_ply_bank_snapshot": first_ply_bank_snapshot,
     }
 
 
@@ -84,17 +92,56 @@ def test_recorded_actions_were_legal_in_preceding_state(played_game):
 
     prev_state_dicts = [initial_state_dict] + [p["state"] for p in plies[:-1]]
 
-    sample_indices = set(range(0, len(plies), 10))
-    sample_indices.add(0)
-    sample_indices.add(len(plies) - 1)
-
-    for i in sorted(sample_indices):
+    for i in range(len(plies)):
         rebuilt = GameState.from_dict(prev_state_dicts[i], config)
         mask = legal_action_mask(rebuilt)
         action_index = plies[i]["action_index"]
         assert mask[action_index], (
             f"ply {i}: action_index {action_index} was not legal in preceding state"
         )
+
+
+def test_recorded_bank_is_not_aliased_across_plies(played_game):
+    """Regression test: GameState.to_dict() must copy self.bank.
+
+    If to_dict() returns the live bank list by reference, every historical
+    ply's recorded "state" ends up sharing the same list object, so once the
+    game mutates the bank further, all previously recorded plies retroactively
+    "change" to reflect the final bank instead of the bank at that point in
+    time. This asserts ply 0's recorded bank still matches a snapshot taken
+    immediately after it was recorded.
+    """
+    recorder = played_game["recorder"]
+    first_ply_bank_snapshot = played_game["first_ply_bank_snapshot"]
+    plies = recorder.to_dict()["plies"]
+
+    assert plies[0]["state"]["bank"] == first_ply_bank_snapshot
+
+
+def test_recorded_player_and_phase_match_ground_truth(played_game):
+    recorder = played_game["recorder"]
+    ground_truth = played_game["ground_truth"]
+    plies = recorder.to_dict()["plies"]
+
+    assert len(plies) == len(ground_truth)
+
+    phase_names_seen = set()
+    for i, (expected_player, expected_phase) in enumerate(ground_truth):
+        assert plies[i]["player"] == expected_player, (
+            f"ply {i}: recorded player {plies[i]['player']} != ground truth {expected_player}"
+        )
+        assert plies[i]["phase"] == expected_phase, (
+            f"ply {i}: recorded phase {plies[i]['phase']} != ground truth {expected_phase}"
+        )
+        phase_names_seen.add(expected_phase)
+
+    # Confirm the seeded game actually exercises discard/robber sub-phases,
+    # so this test is known to cover player/phase attribution during those
+    # transitions and not just the common MAIN-phase path.
+    assert phase_names_seen & {Phase.DISCARD.name, Phase.ROBBER.name}, (
+        "seeded game never exercised DISCARD or ROBBER phase; "
+        "test would not catch attribution bugs in those phases"
+    )
 
 
 def test_trace_is_json_serializable(played_game):

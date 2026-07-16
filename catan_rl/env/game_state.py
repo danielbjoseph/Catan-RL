@@ -201,7 +201,7 @@ class GameState:
             "current_player": self.current_player,
             "phase": int(self.phase),
             "robber_hex": self.robber_hex,
-            "bank": self.bank,
+            "bank": list(self.bank),
             "dev_deck": [int(c) for c in self.dev_deck],
             "dice": list(self.dice) if self.dice else None,
             "longest_road_holder": self.longest_road_holder,
