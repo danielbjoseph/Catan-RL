@@ -47,6 +47,7 @@ _RUN_DEFAULTS = {
     "belief_blend": 0.25,
     "belief_noise": 0.5,
     "device": "cpu",
+    "trace_every": None,
 }
 
 
@@ -82,6 +83,8 @@ class SelfPlayTrainer:
 
         self.run_dir = Path(run_dir) if run_dir else Path("runs") / self.cfg["experiment_name"]
         self.ckpt_dir = self.run_dir / "checkpoints"
+        self.trace_dir = self.run_dir / "traces"
+        self.trace_every = self.cfg["trace_every"]
         self.writer = SummaryWriter(log_dir=str(self.run_dir))
 
         # PPOConfig shares the config namespace; unknown keys are ignored.
@@ -130,6 +133,9 @@ class SelfPlayTrainer:
                 reward_loss=float(self.cfg["reward_loss"]),
                 belief_blend=float(self.cfg["belief_blend"]),
                 belief_noise=float(self.cfg["belief_noise"]),
+                trace_dir=self.trace_dir if self.trace_every else None,
+                trace_every=self.trace_every,
+                trace_prefix=f"iter{it:04d}_",
             )
             stats = self.trainer.update(batch)
             elapsed = time.perf_counter() - t0

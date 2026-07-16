@@ -4,17 +4,21 @@ import json
 import random
 
 import pytest
+import torch
 
 from catan_rl.bots import greedy_bot
 from catan_rl.env.action_mask import legal_action_mask
 from catan_rl.env.board import BoardConfig, BoardGeometry
 from catan_rl.env.game_state import GameState, Phase
 from catan_rl.env.rules import apply_action
-from catan_rl.env.rules_profile import SIMPLIFIED_V1
+from catan_rl.env.rules_profile import SIMPLIFIED_V1, RulesProfile
 from catan_rl.env.trace import TraceRecorder
+from catan_rl.rl.models import ActorCritic
+from catan_rl.rl.rollout import collect_rollouts
 
 MAX_PLIES = 5000
 SEED = 5
+FAST_PROFILE = RulesProfile(name="fast", dev_cards_enabled=False, win_vp=8)
 
 
 # ---------------------------------------------------------------------------
@@ -172,3 +176,54 @@ def test_save_writes_loadable_json_and_creates_parent_dirs(played_game, tmp_path
     board = loaded["header"]["board"]
     assert len(board["hex_resources"]) == 19
     assert len(board["hex_tokens"]) == 19
+
+
+# ---------------------------------------------------------------------------
+# collect_rollouts trace_dir / trace_every wiring
+# ---------------------------------------------------------------------------
+
+def _tiny_policy():
+    torch.manual_seed(0)
+    return ActorCritic(hidden_sizes=(8, 8))
+
+
+def test_collect_rollouts_writes_traces_when_enabled(tmp_path):
+    policy = _tiny_policy()
+    collect_rollouts(
+        policy, n_games=2, rules_profile=FAST_PROFILE, seed=123, max_turns=500,
+        trace_dir=tmp_path, trace_every=1,
+    )
+
+    files = sorted(tmp_path.glob("*.json"))
+    assert len(files) == 2
+    assert [f.name for f in files] == ["game0000.json", "game0001.json"]
+
+    for f in files:
+        with open(f, "r", encoding="utf-8") as fh:
+            trace = json.load(fh)
+        assert trace["version"] == 1
+        assert trace["plies"], "expected at least one recorded ply"
+        last_state = trace["plies"][-1]["state"]
+        # Game ended either by reaching a winner or hitting the turn cap
+        # (truncation) -- either way the final recorded ply must be the
+        # end-of-game snapshot.
+        assert last_state["winner"] is not None or last_state["turn_number"] >= 500
+
+
+def test_collect_rollouts_writes_nothing_when_trace_every_is_none(tmp_path):
+    policy = _tiny_policy()
+    collect_rollouts(
+        policy, n_games=2, rules_profile=FAST_PROFILE, seed=123, max_turns=500,
+        trace_dir=tmp_path,
+    )
+    assert list(tmp_path.glob("*.json")) == []
+
+
+def test_collect_rollouts_respects_trace_every_stride(tmp_path):
+    policy = _tiny_policy()
+    collect_rollouts(
+        policy, n_games=4, rules_profile=FAST_PROFILE, seed=123, max_turns=500,
+        trace_dir=tmp_path, trace_every=2,
+    )
+    files = sorted(f.name for f in tmp_path.glob("*.json"))
+    assert files == ["game0000.json", "game0002.json"]

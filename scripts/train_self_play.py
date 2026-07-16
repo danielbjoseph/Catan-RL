@@ -28,11 +28,16 @@ def main():
                         help="Override runs/<experiment_name>")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from the latest checkpoint in the run dir")
+    parser.add_argument("--trace", type=int, default=None,
+                        help="Trace every Nth game of each iteration to "
+                             "runs/<run_name>/traces/iter<k>_game<g>.json (default: off)")
     args = parser.parse_args()
 
     trainer = SelfPlayTrainer(
         args.config, run_dir=args.run_dir, device=args.device, resume=args.resume
     )
+    if args.trace is not None:
+        trainer.trace_every = args.trace
     print(f"config: {args.config}  run_dir: {trainer.run_dir}  device: {trainer.device}")
     try:
         trainer.train(iterations=args.iterations)

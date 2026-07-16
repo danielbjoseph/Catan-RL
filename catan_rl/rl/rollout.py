@@ -12,15 +12,17 @@ flattened together for the PPO minibatch update.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 
-from ..env.actions import CATALOG_SIZE
+from ..env.actions import CATALOG, CATALOG_SIZE
 from ..env.pettingzoo_env import CatanAECEnv
 from ..env.rules_profile import RulesProfile
 from ..env.scoring import compute_vp
+from ..env.trace import TraceRecorder
 from .models import ActorCritic
 
 
@@ -99,8 +101,23 @@ def collect_rollouts(
     reward_loss: float = -1.0,
     belief_blend: float = 0.25,
     belief_noise: float = 0.5,
+    trace_dir: Optional[Union[str, Path]] = None,
+    trace_every: Optional[int] = None,
+    trace_prefix: str = "",
 ) -> Batch:
-    """Play n_games of 4-seat self-play with a single shared policy."""
+    """Play n_games of 4-seat self-play with a single shared policy.
+
+    trace_dir / trace_every: opt-in game recording. When both are set, every
+    game whose index `g` satisfies `g % trace_every == 0` is recorded with a
+    TraceRecorder and saved to `trace_dir / f"{trace_prefix}game{g:04d}.json"`.
+    When either is None (the default), no recorder is created and there is no
+    extra state cloning/dict overhead in the hot loop.
+    """
+    tracing_enabled = trace_dir is not None and trace_every is not None
+    if tracing_enabled:
+        trace_dir = Path(trace_dir)
+        trace_dir.mkdir(parents=True, exist_ok=True)
+
     env = CatanAECEnv(
         obs_mode=obs_mode,
         reward_win=reward_win,
@@ -126,6 +143,14 @@ def collect_rollouts(
         env.reset(seed=game_seed)
         seats = {agent: _SeatTrajectory() for agent in env.agents}
 
+        recorder = None
+        if tracing_enabled and game_idx % trace_every == 0:
+            recorder = TraceRecorder()
+            recorder.start(
+                env._state,
+                {"seed": game_seed, "game_index": game_idx, "obs_mode": obs_mode},
+            )
+
         while not (all(env.terminations.values()) or all(env.truncations.values())):
             agent = env.agent_selection
             obs_dict = env.observe(agent)
@@ -143,7 +168,13 @@ def collect_rollouts(
             traj.logprobs.append(float(logprob_t.item()))
             traj.values.append(float(value_t.item()))
 
-            env.step(int(action_t.item()))
+            action_idx = int(action_t.item())
+            env.step(action_idx)
+            if recorder is not None:
+                recorder.record(CATALOG[action_idx], env._state)
+
+        if recorder is not None:
+            recorder.save(trace_dir / f"{trace_prefix}game{game_idx:04d}.json")
 
         truncated = all(env.truncations.values()) and not all(env.terminations.values())
         if truncated:

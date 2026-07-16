@@ -23,6 +23,7 @@ from catan_rl.env.game_state import GameState
 from catan_rl.env.rules import apply_action
 from catan_rl.env.rules_profile import RulesProfile
 from catan_rl.env.scoring import compute_vp
+from catan_rl.env.trace import TraceRecorder
 
 BOTS = {
     "random": random_bot.pick_action,
@@ -42,6 +43,8 @@ def main():
     parser.add_argument("--max-turns", type=int, default=500)
     parser.add_argument("--every", type=int, default=1,
                         help="Print a board summary every N turns")
+    parser.add_argument("--trace", default=None, metavar="out.json",
+                        help="Record the match and save the trace JSON to this path")
     args = parser.parse_args()
 
     names = [b.strip() for b in args.bots.split(",")]
@@ -70,6 +73,14 @@ def main():
     state = GameState.new_game(config, n_players=4, seed=args.seed,
                                profile=RulesProfile.get(args.profile))
 
+    recorder = None
+    if args.trace:
+        recorder = TraceRecorder()
+        recorder.start(state, {
+            "seed": args.seed,
+            "seats": [name for name, _ in actors],
+        })
+
     last_turn = -1
     plies = 0
     while not state.is_terminal and state.turn_number < args.max_turns:
@@ -78,6 +89,8 @@ def main():
         print(f"  t={state.turn_number:4d} P{state.current_player} "
               f"{state.phase.name:20s} {action}")
         apply_action(state, action, rng)
+        if recorder is not None:
+            recorder.record(action, state)
         plies += 1
         if state.turn_number != last_turn and state.turn_number % args.every == 0:
             last_turn = state.turn_number
@@ -92,6 +105,10 @@ def main():
         print(f"Winner: P{state.winner} ({actors[state.winner][0]})")
     else:
         print("No winner (turn limit reached)")
+
+    if recorder is not None:
+        out_path = recorder.save(args.trace)
+        print(f"trace saved to {out_path}")
 
 
 if __name__ == "__main__":

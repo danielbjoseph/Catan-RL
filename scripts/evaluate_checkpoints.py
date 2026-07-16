@@ -40,6 +40,13 @@ def main():
     parser.add_argument("--profile", default="simplified_v1")
     parser.add_argument("--max-turns", type=int, default=500)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--trace", type=int, default=None, metavar="N",
+                        help="Trace every Nth eval game (--trace 1 traces every "
+                             "game). Off by default. Written under --trace-dir.")
+    parser.add_argument("--trace-dir", default=None,
+                        help="Directory for traces (default: <run>/traces, or "
+                             "<ckpt's parent>/traces when using --ckpt alone). "
+                             "Each checkpoint/opponent pair gets its own subdir.")
     args = parser.parse_args()
 
     if args.vs_ckpt and not args.ckpt:
@@ -57,14 +64,23 @@ def main():
         print("no checkpoints found")
         sys.exit(1)
 
+    if args.trace_dir:
+        base_trace_dir = Path(args.trace_dir)
+    elif args.run:
+        base_trace_dir = Path(args.run) / "traces"
+    else:
+        base_trace_dir = Path(args.ckpt).resolve().parent / "traces"
+
     if args.vs_ckpt:
         policy_a, meta_a = load_policy(args.ckpt)
         policy_b, meta_b = load_policy(args.vs_ckpt)
         mode_a = meta_a.get("obs_mode", "self_play")
         mode_b = meta_b.get("obs_mode", "self_play")
+        trace_dir = base_trace_dir / f"{Path(args.ckpt).stem}_vs_{Path(args.vs_ckpt).stem}"
         result = evaluate_policy_vs_policy(
             policy_a, mode_a, policy_b, mode_b, args.games,
             rules_profile=args.profile, seed=args.seed, max_turns=args.max_turns,
+            trace_dir=trace_dir, trace_every=args.trace,
         )
         header = ["ckpt_a", "mode_a", "ckpt_b", "mode_b", "win_rate_a", "win_rate_b", "draws"]
         row = [
@@ -87,14 +103,21 @@ def main():
         policy, meta = load_policy(ckpt)
         row = [ckpt.name]
         for opp in opponents:
+            trace_dir = base_trace_dir / ckpt.stem / f"vs_{opp}"
             if opp == "prev":
                 if prev_path is None:
                     row.append("-")
                     continue
-                r = evaluate_vs_checkpoint(policy, prev_path, args.games, **kwargs)
+                r = evaluate_vs_checkpoint(
+                    policy, prev_path, args.games,
+                    trace_dir=trace_dir, trace_every=args.trace, **kwargs,
+                )
                 row.append(f"{r['win_rate']:.2f}")
             elif opp in BOTS:
-                r = evaluate_vs_bots(policy, BOTS[opp], args.games, **kwargs)
+                r = evaluate_vs_bots(
+                    policy, BOTS[opp], args.games,
+                    trace_dir=trace_dir, trace_every=args.trace, **kwargs,
+                )
                 row.append(f"{r['win_rate']:.2f} (vp={r['mean_vp']:.1f})")
             else:
                 parser.error(f"unknown opponent {opp!r}")
