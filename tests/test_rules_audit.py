@@ -540,6 +540,61 @@ class TestLongestRoadRevocation:
         assert lengths[0] == lengths[3] == max(lengths)
         assert state.longest_road_holder is None
 
+    def test_holder_dethroned_by_tie_nobody_holds_it(self, seed=0):
+        """(f) Player 1 holds the card with an 8-edge road. Player 2's
+        settlement splits it into a 5-edge and a 3-edge half (still >= 5
+        overall), while players 0 and 3 each independently hold untouched
+        6-edge roads -- a tie for the new maximum, both exceeding the
+        dethroned holder. Official rule: on a tie nobody holds the card,
+        even though the previous holder still clears the >=5 minimum
+        itself. A buggy "first strictly-longer pid wins" scan would instead
+        award it to whichever of {0, 3} has the lower player id."""
+        config = BoardConfig.standard(seed=seed)
+        state = GameState.new_game(config, n_players=4, seed=seed)
+        geo = config.geometry
+        for p in state.players:
+            p.settlement_vertices = set()
+            p.city_vertices = set()
+            p.road_vertices = set()
+            p.roads_built = 0
+            p.resources = [0] * 5
+
+        used_edges = set()
+        blocked = set()
+
+        e1, v1 = _greedy_road_chain(geo, 0, 8, used_edges, blocked)
+        assert len(e1) == 8, "geometry changed: 8-edge chain from vertex 0 unavailable"
+        blocked |= set(v1)
+
+        e0, v0 = _greedy_road_chain(geo, 53, 6, used_edges, blocked)
+        assert len(e0) == 6, "geometry changed: 6-edge chain from vertex 53 unavailable"
+        blocked |= set(v0)
+
+        e3, v3 = _greedy_road_chain(geo, 27, 6, used_edges, blocked)
+        assert len(e3) == 6, "geometry changed: 6-edge chain from vertex 27 unavailable"
+        blocked |= set(v3)
+
+        state.players[1].road_vertices = set(e1)
+        state.players[1].roads_built = len(e1)
+        state.players[0].road_vertices = set(e0)
+        state.players[0].roads_built = len(e0)
+        state.players[3].road_vertices = set(e3)
+        state.players[3].roads_built = len(e3)
+
+        mid_v = v1[5]
+        assert mid_v not in v0 and mid_v not in v3
+
+        update_longest_road(state)
+        assert state.longest_road_holder == 1, "setup: player 1 should start as holder"
+        assert compute_longest_road(1, state) == 8
+
+        self._split_player1_road(state, mid_v)
+
+        lengths = [compute_longest_road(pid, state) for pid in range(state.n_players)]
+        assert lengths[1] == 5, f"setup drifted: expected dethroned holder at 5, got {lengths}"
+        assert lengths[0] == 6 and lengths[3] == 6, f"setup drifted: {lengths}"
+        assert state.longest_road_holder is None
+
 
 # ---------------------------------------------------------------------------
 # Audit evidence tests: rules that were correct but previously untested

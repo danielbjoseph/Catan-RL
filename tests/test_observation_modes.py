@@ -185,6 +185,25 @@ class TestRealisticBeliefFeatures:
             res_block, unc = self._opponent_block(obs, rel_i)
             np.testing.assert_array_equal(res_block, (tracker.expected(pid) / 19.0).astype(np.float32))
 
+    def test_different_opponents_get_independent_noise(self, monkeypatch):
+        """Regression: the noise RNG key used to be (seed, turn, observer)
+        with no opponent component, so if two opponents happened to share
+        the same underlying expected-hand vector they'd get the *exact
+        same* noise draw applied. Force that scenario by making the
+        tracker return an identical raw vector for every opponent, and
+        confirm the three resulting (noised) blocks are not all identical."""
+        state, tracker = _play_random(seed=3, n_plies=30)
+        same_vec = np.array([2.0, 1.0, 0.0, 3.0, 1.0], dtype=np.float32)
+        monkeypatch.setattr(tracker, "expected", lambda pid: same_vec.copy())
+        noise_cfg = {"belief_blend": 0.3, "belief_noise": 0.8, "seed": 11}
+        obs = make_observation(
+            state, observer=0, mode="realistic", belief=tracker, noise_cfg=noise_cfg,
+        )
+        blocks = [self._opponent_block(obs, rel_i)[0] for rel_i in range(1, 4)]
+        assert not (
+            np.array_equal(blocks[0], blocks[1]) and np.array_equal(blocks[1], blocks[2])
+        ), "all three opponents got the identical noise draw"
+
     def test_dev_deck_and_bank_blocks(self):
         state, tracker = _play_random(seed=4, n_plies=30)
         obs = make_observation(state, observer=0, mode="realistic", belief=tracker)
@@ -219,6 +238,21 @@ class TestApplyBeliefNoise:
         out0 = apply_belief_noise(vec, 6, blend=0.3, sigma=0.5, key=(42, 5, 0))
         out1 = apply_belief_noise(vec, 6, blend=0.3, sigma=0.5, key=(42, 5, 1))
         assert not np.array_equal(out0, out1)
+
+    def test_different_pid_same_key_differs(self):
+        """Two opponents observed on the same turn by the same observer
+        (identical key) must still get independent noise draws once `pid`
+        is mixed in."""
+        vec = np.array([2.0, 1.0, 0.0, 3.0, 0.0], dtype=np.float32)
+        out0 = apply_belief_noise(vec, 6, blend=0.3, sigma=0.5, key=(42, 5, 0), pid=1)
+        out1 = apply_belief_noise(vec, 6, blend=0.3, sigma=0.5, key=(42, 5, 0), pid=2)
+        assert not np.array_equal(out0, out1)
+
+    def test_same_pid_same_key_identical(self):
+        vec = np.array([2.0, 1.0, 0.0, 3.0, 0.0], dtype=np.float32)
+        out0 = apply_belief_noise(vec, 6, blend=0.3, sigma=0.5, key=(42, 5, 0), pid=3)
+        out1 = apply_belief_noise(vec, 6, blend=0.3, sigma=0.5, key=(42, 5, 0), pid=3)
+        assert np.array_equal(out0, out1)
 
     def test_sum_preserved(self):
         vec = np.array([2.0, 1.0, 0.0, 3.0, 0.0], dtype=np.float32)

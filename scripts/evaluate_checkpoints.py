@@ -27,6 +27,33 @@ BOTS = {
     "heuristic": heuristic_bot.pick_action,
 }
 
+_DEFAULT_BELIEF_BLEND = 0.25
+_DEFAULT_BELIEF_NOISE = 0.5
+
+
+def eval_kwargs_from_meta(meta: dict, seed: int = 0) -> dict:
+    """Derive the obs_mode/noise_cfg kwargs to evaluate a loaded checkpoint
+    with, from that checkpoint's own saved metadata.
+
+    A checkpoint trained in a non-self_play obs_mode has a different
+    observation dimensionality baked into its policy weights, so evaluation
+    must dispatch on the checkpoint's own stored ``obs_mode`` rather than
+    silently defaulting to self_play (which crashes with a shape mismatch).
+    For realistic mode, belief_blend/belief_noise are taken from the
+    checkpoint's own stored training config when present, else the standard
+    0.25/0.5 defaults.
+    """
+    obs_mode = meta.get("obs_mode", "self_play")
+    noise_cfg = None
+    if obs_mode == "realistic":
+        cfg = meta.get("config") or {}
+        noise_cfg = {
+            "belief_blend": float(cfg.get("belief_blend", _DEFAULT_BELIEF_BLEND)),
+            "belief_noise": float(cfg.get("belief_noise", _DEFAULT_BELIEF_NOISE)),
+            "seed": seed,
+        }
+    return {"obs_mode": obs_mode, "noise_cfg": noise_cfg}
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -74,12 +101,15 @@ def main():
     if args.vs_ckpt:
         policy_a, meta_a = load_policy(args.ckpt)
         policy_b, meta_b = load_policy(args.vs_ckpt)
-        mode_a = meta_a.get("obs_mode", "self_play")
-        mode_b = meta_b.get("obs_mode", "self_play")
+        kwargs_a = eval_kwargs_from_meta(meta_a, seed=args.seed)
+        kwargs_b = eval_kwargs_from_meta(meta_b, seed=args.seed)
+        mode_a = kwargs_a["obs_mode"]
+        mode_b = kwargs_b["obs_mode"]
         trace_dir = base_trace_dir / f"{Path(args.ckpt).stem}_vs_{Path(args.vs_ckpt).stem}"
         result = evaluate_policy_vs_policy(
             policy_a, mode_a, policy_b, mode_b, args.games,
             rules_profile=args.profile, seed=args.seed, max_turns=args.max_turns,
+            noise_cfg_a=kwargs_a["noise_cfg"], noise_cfg_b=kwargs_b["noise_cfg"],
             trace_dir=trace_dir, trace_every=args.trace,
         )
         header = ["ckpt_a", "mode_a", "ckpt_b", "mode_b", "win_rate_a", "win_rate_b", "draws"]
@@ -101,6 +131,7 @@ def main():
     prev_path = None
     for ckpt in ckpts:
         policy, meta = load_policy(ckpt)
+        ckpt_kwargs = eval_kwargs_from_meta(meta, seed=args.seed)
         row = [ckpt.name]
         for opp in opponents:
             trace_dir = base_trace_dir / ckpt.stem / f"vs_{opp}"
@@ -110,12 +141,14 @@ def main():
                     continue
                 r = evaluate_vs_checkpoint(
                     policy, prev_path, args.games,
+                    obs_mode=ckpt_kwargs["obs_mode"], noise_cfg=ckpt_kwargs["noise_cfg"],
                     trace_dir=trace_dir, trace_every=args.trace, **kwargs,
                 )
                 row.append(f"{r['win_rate']:.2f}")
             elif opp in BOTS:
                 r = evaluate_vs_bots(
                     policy, BOTS[opp], args.games,
+                    obs_mode=ckpt_kwargs["obs_mode"], noise_cfg=ckpt_kwargs["noise_cfg"],
                     trace_dir=trace_dir, trace_every=args.trace, **kwargs,
                 )
                 row.append(f"{r['win_rate']:.2f} (vp={r['mean_vp']:.1f})")

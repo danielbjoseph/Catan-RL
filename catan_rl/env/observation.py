@@ -89,11 +89,17 @@ def apply_belief_noise(
     blend: float,
     sigma: float,
     key: tuple,
+    pid: int = 0,
 ) -> np.ndarray:
     """Apply belief-blend + Gaussian noise to a per-opponent expected-hand
     vector, then renormalize back to sum to ``hand_size``.
 
     key = (seed, turn, observer) -- used to derive a deterministic RNG.
+    ``pid`` identifies which opponent this vector belongs to and is mixed
+    into the same seed so that different opponents observed on the same
+    turn by the same observer get independent noise draws rather than an
+    identical one (it defaults to 0, so omitting it reproduces the prior
+    behavior for callers that only ever noise a single vector per key).
     If both ``blend`` and ``sigma`` are zero, ``vec`` is returned unchanged
     (as a copy) so that the "no noise" configuration is bit-exact with the
     raw tracker output.
@@ -111,7 +117,9 @@ def apply_belief_noise(
 
     if sigma:
         seed, turn, observer = key
-        rng_seed = (int(seed) * 1_000_003 + int(turn) * 1_009 + int(observer)) % (2 ** 32)
+        rng_seed = (
+            int(seed) * 1_000_003 + int(turn) * 1_009 + int(observer) + int(pid) * 97
+        ) % (2 ** 32)
         rng = np.random.default_rng(rng_seed)
         std = sigma * np.sqrt(max(hand_size, 1.0)) / 5.0
         noise = rng.normal(0.0, std, size=n).astype(np.float32)
@@ -304,7 +312,7 @@ def make_observation(
                 sigma = float(noise_cfg.get("belief_noise", 0.0))
                 seed = int(noise_cfg.get("seed", 0))
                 key = (seed, state.turn_number, observer)
-                exp_vec = apply_belief_noise(exp_vec, hand_size, blend, sigma, key)
+                exp_vec = apply_belief_noise(exp_vec, hand_size, blend, sigma, key, pid=pid)
             unc = belief.uncertainty(pid)
             opp_blocks.append(exp_vec.astype(np.float32) / 19.0)
             opp_blocks.append(np.array([unc], dtype=np.float32))

@@ -159,8 +159,11 @@ def create_app(runs_dir) -> Flask:
             abort(400)
         if not path.is_file():
             abort(404)
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            return jsonify({"error": "trace file is corrupt or unreadable"}), 404
         return jsonify(data)
 
     return app

@@ -1,5 +1,8 @@
 """Tests for the evaluation harness."""
 
+import sys
+from pathlib import Path
+
 import torch
 
 from catan_rl.bots import random_bot
@@ -10,8 +13,11 @@ from catan_rl.rl.evaluate import (
     evaluate_vs_bots,
     evaluate_vs_checkpoint,
 )
-from catan_rl.rl.checkpointing import save_checkpoint
+from catan_rl.rl.checkpointing import load_policy, save_checkpoint
 from catan_rl.rl.models import ActorCritic
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from scripts.evaluate_checkpoints import eval_kwargs_from_meta
 
 FAST = RulesProfile(name="fast", dev_cards_enabled=False, win_vp=8)
 
@@ -113,6 +119,63 @@ def test_evaluate_policy_vs_policy_deterministic():
         n_games=2, rules_profile=FAST, seed=11, max_turns=400,
     )
     assert result1 == result2
+
+
+def test_eval_kwargs_from_meta_dispatches_realistic_obs_mode(tmp_path):
+    """A checkpoint trained in realistic mode must be evaluated with
+    obs_mode='realistic' and a noise_cfg (defaulting to 0.25/0.5 when the
+    checkpoint's own config doesn't specify belief_blend/belief_noise),
+    otherwise evaluate_vs_bots crashes with a shape mismatch (1520 vs 1549)
+    because it silently defaults to self_play."""
+    policy = _policy(seed=1, obs_mode="realistic")
+    opt = torch.optim.Adam(policy.parameters())
+    ckpt = save_checkpoint(tmp_path, policy, opt, 0, {}, {}, obs_mode="realistic")
+
+    loaded_policy, meta = load_policy(ckpt)
+    kwargs = eval_kwargs_from_meta(meta, seed=3)
+    assert kwargs["obs_mode"] == "realistic"
+    assert kwargs["noise_cfg"] == {
+        "belief_blend": 0.25,
+        "belief_noise": 0.5,
+        "seed": 3,
+    }
+
+    # Exercise the same call path the script uses: must run without crashing.
+    result = evaluate_vs_bots(
+        loaded_policy, random_bot.pick_action, n_games=1,
+        rules_profile=FAST, seed=3, max_turns=5,
+        obs_mode=kwargs["obs_mode"], noise_cfg=kwargs["noise_cfg"],
+    )
+    assert result["games"] == 1
+
+
+def test_eval_kwargs_from_meta_uses_ckpts_own_belief_config(tmp_path):
+    """When the checkpoint's stored training config carries custom
+    belief_blend/belief_noise values, those must be used instead of the
+    0.25/0.5 defaults."""
+    policy = _policy(seed=1, obs_mode="realistic")
+    opt = torch.optim.Adam(policy.parameters())
+    ckpt = save_checkpoint(
+        tmp_path, policy, opt, 0,
+        config={"belief_blend": 0.1, "belief_noise": 0.9},
+        metrics={}, obs_mode="realistic",
+    )
+    _, meta = load_policy(ckpt)
+    kwargs = eval_kwargs_from_meta(meta, seed=5)
+    assert kwargs["noise_cfg"] == {
+        "belief_blend": 0.1,
+        "belief_noise": 0.9,
+        "seed": 5,
+    }
+
+
+def test_eval_kwargs_from_meta_self_play_has_no_noise_cfg(tmp_path):
+    policy = _policy(seed=1, obs_mode="self_play")
+    opt = torch.optim.Adam(policy.parameters())
+    ckpt = save_checkpoint(tmp_path, policy, opt, 0, {}, {}, obs_mode="self_play")
+    _, meta = load_policy(ckpt)
+    kwargs = eval_kwargs_from_meta(meta)
+    assert kwargs == {"obs_mode": "self_play", "noise_cfg": None}
 
 
 def test_evaluate_policy_vs_policy_draws_on_truncation():

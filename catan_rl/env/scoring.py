@@ -123,10 +123,18 @@ def update_longest_road(state: "GameState"):
     lengths = [compute_longest_road(pid, state) for pid in range(state.n_players)]
     holder = state.longest_road_holder
     if holder is not None:
-        for pid, ln in enumerate(lengths):
-            if pid != holder and ln > lengths[holder] and ln >= LONGEST_ROAD_MIN:
-                state.longest_road_holder = pid
-                return
+        challengers = [
+            pid for pid, ln in enumerate(lengths)
+            if pid != holder and ln > lengths[holder] and ln >= LONGEST_ROAD_MIN
+        ]
+        if challengers:
+            best = max(lengths[pid] for pid in challengers)
+            top = [pid for pid in challengers if lengths[pid] == best]
+            # A unique strict challenger takes the card; a tie among
+            # challengers means nobody holds it, even though the dethroned
+            # holder itself may still meet the >=5 minimum.
+            state.longest_road_holder = top[0] if len(top) == 1 else None
+            return
         if lengths[holder] < LONGEST_ROAD_MIN:
             eligible = [ln for ln in lengths if ln >= LONGEST_ROAD_MIN]
             if eligible:

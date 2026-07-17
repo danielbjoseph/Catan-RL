@@ -176,6 +176,21 @@ def test_fetch_trace_missing_run_is_404(client):
     assert resp.status_code == 404
 
 
+def test_fetch_corrupt_trace_file_is_404_not_500(client, runs_dir):
+    """Listing already skips unparseable trace files (see
+    test_list_traces_skips_corrupt_trace_file); fetching one directly must
+    likewise fail gracefully with a 404 instead of an unhandled 500 from a
+    bare json.load."""
+    bad_path = runs_dir / "run_a" / "traces" / "bad.json"
+    with open(bad_path, "w", encoding="utf-8") as f:
+        f.write("{not json")
+
+    resp = client.get("/api/trace/run_a/bad.json")
+    assert resp.status_code == 404
+    assert resp.get_json() is not None
+    assert "error" in resp.get_json()
+
+
 # ---------------------------------------------------------------------------
 # Path traversal
 # ---------------------------------------------------------------------------
