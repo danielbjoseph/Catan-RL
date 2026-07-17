@@ -17,6 +17,7 @@ from .actions import (
     road_action, settlement_action, city_action, move_robber_action,
     steal_action, maritime_trade_action, discard_action,
     year_of_plenty_action, monopoly_action,
+    propose_trade_action, ACCEPT_TRADE, DECLINE_TRADE,
 )
 from .game_state import Phase
 
@@ -50,6 +51,8 @@ def legal_actions(state: "GameState") -> List[Action]:
         return actions
     if phase == Phase.MAIN:
         return _main_actions(state)
+    if phase == Phase.TRADE_RESPONSE:
+        return [ACCEPT_TRADE, DECLINE_TRADE]
     return []
 
 
@@ -196,6 +199,16 @@ def _main_actions(state: "GameState") -> List[Action]:
 
     # Maritime trades
     actions.extend(_maritime_trade_actions(state))
+
+    # P2P trade proposals
+    if state.profile.trades_enabled and state.trades_proposed_this_turn < state.profile.max_trades_per_turn:
+        for give in Resource:
+            for get in Resource:
+                if give == get:
+                    continue
+                for n in (1, 2):
+                    if player.resources[int(give)] >= n:
+                        actions.append(propose_trade_action(give, get, n))
 
     # Play dev cards
     actions.extend(_dev_card_actions(state))

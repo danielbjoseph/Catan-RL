@@ -45,6 +45,7 @@ class Phase(IntEnum):
     ROAD_BUILDING_2    = 9   # second road of road-building dev card
     MAIN               = 10  # normal turn actions (build/trade/dev/end)
     GAME_OVER          = 11
+    TRADE_RESPONSE     = 12  # a responder must ACCEPT_TRADE/DECLINE_TRADE a P2P offer
 
 
 @dataclass
@@ -67,6 +68,12 @@ class GameState:
     # Pending state for sub-phases
     pending_steal_hex: Optional[int] = None
     discard_obligations: Dict[int, int] = field(default_factory=dict)  # player_id -> n to discard
+
+    # P2P trade sub-phase: {"proposer": int, "give": int, "get": int, "give_n": int,
+    # "responses": {pid: Optional[bool]}} (give/get are plain Resource ints); responses
+    # cover the non-proposer seats, None=pending, False=declined, True=accepted.
+    pending_trade: Optional[dict] = None
+    trades_proposed_this_turn: int = 0  # reset each _end_turn
 
     # Setup phase tracking: which player index (in setup order) is acting
     _setup_forward_idx: int = 0   # counts up during SETUP_*_1 phases
@@ -187,6 +194,12 @@ class GameState:
         s.rolled_this_turn = self.rolled_this_turn
         s.pending_steal_hex = self.pending_steal_hex
         s.discard_obligations = dict(self.discard_obligations)
+        if self.pending_trade is None:
+            s.pending_trade = None
+        else:
+            s.pending_trade = dict(self.pending_trade)
+            s.pending_trade["responses"] = dict(self.pending_trade["responses"])
+        s.trades_proposed_this_turn = self.trades_proposed_this_turn
         s._setup_forward_idx = self._setup_forward_idx
         s._setup_backward_idx = self._setup_backward_idx
         return s
@@ -212,6 +225,14 @@ class GameState:
             "rolled_this_turn": self.rolled_this_turn,
             "pending_steal_hex": self.pending_steal_hex,
             "discard_obligations": {str(k): v for k, v in self.discard_obligations.items()},
+            "pending_trade": (
+                None if self.pending_trade is None
+                else {
+                    **self.pending_trade,
+                    "responses": {str(k): v for k, v in self.pending_trade["responses"].items()},
+                }
+            ),
+            "trades_proposed_this_turn": self.trades_proposed_this_turn,
             "_setup_forward_idx": self._setup_forward_idx,
             "_setup_backward_idx": self._setup_backward_idx,
         }
@@ -235,6 +256,12 @@ class GameState:
         s.rolled_this_turn = d.get("rolled_this_turn", False)
         s.pending_steal_hex = d["pending_steal_hex"]
         s.discard_obligations = {int(k): v for k, v in d["discard_obligations"].items()}
+        pending_trade = d.get("pending_trade")
+        if pending_trade is not None:
+            pending_trade = dict(pending_trade)
+            pending_trade["responses"] = {int(k): v for k, v in pending_trade["responses"].items()}
+        s.pending_trade = pending_trade
+        s.trades_proposed_this_turn = d.get("trades_proposed_this_turn", 0)
         s._setup_forward_idx = d["_setup_forward_idx"]
         s._setup_backward_idx = d["_setup_backward_idx"]
         return s
