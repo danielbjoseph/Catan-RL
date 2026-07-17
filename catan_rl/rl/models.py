@@ -1,7 +1,7 @@
 """
 Actor-critic network with legal-action masking.
 
-The policy head always outputs 256 logits (the full action catalog);
+The policy head always outputs CATALOG_SIZE logits (the full action catalog);
 illegal slots are masked to a large negative value before softmax so the
 categorical distribution places (numerically) zero probability on them.
 """
@@ -32,7 +32,7 @@ def _init_layer(layer: nn.Linear, std: float = 2 ** 0.5) -> nn.Linear:
 
 
 class ActorCritic(nn.Module):
-    """MLP trunk with a 256-logit policy head and a scalar value head."""
+    """MLP trunk with a CATALOG_SIZE-logit policy head and a scalar value head."""
 
     def __init__(
         self,

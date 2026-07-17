@@ -31,7 +31,7 @@ class Batch:
     """Flattened training batch pooled over all seats and games."""
 
     obs: torch.Tensor         # (N, obs_dim) float32
-    masks: torch.Tensor       # (N, 256) bool
+    masks: torch.Tensor       # (N, CATALOG_SIZE) bool
     actions: torch.Tensor     # (N,) long
     logprobs: torch.Tensor    # (N,) float32
     values: torch.Tensor      # (N,) float32

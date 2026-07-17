@@ -1,8 +1,9 @@
 """
-Fixed 256-slot action catalog for Catan.
+Fixed 512-slot action catalog for Catan (v2, adds P2P trade actions).
 
 Every (action_type, parameter) combination has a permanent catalog index.
-The policy network always outputs 256 logits; illegal slots are masked to -inf.
+The policy network always outputs CATALOG_SIZE logits; illegal slots are
+masked to -inf.
 
 Catalog layout:
   0        ROLL_DICE
@@ -20,7 +21,11 @@ Catalog layout:
   233-247  PLAY_YEAR_OF_PLENTY(res_a, res_b) -- 15 unordered pairs w/ repetition
   248-252  PLAY_MONOPOLY(resource 0-4)
   253      PLAY_VICTORY_POINT
-  254-255  reserved
+  254-255  reserved (v1 padding, CATALOG_SIZE_V1 boundary)
+  256-295  PROPOSE_TRADE(give, get, give_n) -- 20 ordered pairs x give_n in {1,2}
+  296      ACCEPT_TRADE
+  297      DECLINE_TRADE
+  298-511  reserved padding
 """
 
 from __future__ import annotations
@@ -28,7 +33,9 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Optional, Tuple
 
-CATALOG_SIZE = 256
+CATALOG_SIZE_V1 = 256
+CATALOG_SIZE = 512
+CATALOG_VERSION = 2
 
 
 class Resource(IntEnum):
@@ -63,6 +70,9 @@ class ActionType(IntEnum):
     PLAY_YEAR_OF_PLENTY = 12
     PLAY_MONOPOLY = 13
     PLAY_VICTORY_POINT = 14
+    PROPOSE_TRADE = 15
+    ACCEPT_TRADE = 16
+    DECLINE_TRADE = 17
 
 
 @dataclass(frozen=True)
@@ -75,6 +85,7 @@ class Action:
     player_id: Optional[int] = None      # CHOOSE_STEAL_TARGET
     resource: Optional[Resource] = None  # MARITIME_TRADE give, DISCARD, PLAY_MONOPOLY
     resource2: Optional[Resource] = None # MARITIME_TRADE get, PLAY_YEAR_OF_PLENTY second
+    give_n: Optional[int] = None          # PROPOSE_TRADE ratio (1 or 2)
     catalog_index: int = -1
 
     def __str__(self) -> str:
@@ -97,6 +108,8 @@ class Action:
             return f"{t}({self.resource.name}, {self.resource2.name})"
         if self.action_type == ActionType.PLAY_MONOPOLY:
             return f"{t}({self.resource.name})"
+        if self.action_type == ActionType.PROPOSE_TRADE:
+            return f"{t}(give={self.give_n}x{self.resource.name}, get={self.resource2.name})"
         return t
 
 
@@ -114,6 +127,7 @@ def _build_catalog() -> Tuple[list[Action], dict]:
             player_id=action.player_id,
             resource=action.resource,
             resource2=action.resource2,
+            give_n=action.give_n,
             catalog_index=idx,
         )
         catalog.append(obj)
@@ -162,7 +176,20 @@ def _build_catalog() -> Tuple[list[Action], dict]:
         add(Action(ActionType.PLAY_MONOPOLY, resource=r))
     # 253: PLAY_VICTORY_POINT
     add(Action(ActionType.PLAY_VICTORY_POINT))
-    # 254-255: padding (reserved, never legal)
+    # 254-255: padding (reserved, never legal) -- pad to end of v1 catalog
+    while len(catalog) < CATALOG_SIZE_V1:
+        add(Action(ActionType.ROLL_DICE))  # unreachable slots
+
+    # 256-295: PROPOSE_TRADE (20 ordered pairs x give_n in {1,2})
+    for give in Resource:
+        for get in Resource:
+            if give != get:
+                for n in (1, 2):
+                    add(Action(ActionType.PROPOSE_TRADE, resource=give, resource2=get, give_n=n))
+    # 296: ACCEPT_TRADE, 297: DECLINE_TRADE
+    add(Action(ActionType.ACCEPT_TRADE))
+    add(Action(ActionType.DECLINE_TRADE))
+    # 298-511: reserved padding
     while len(catalog) < CATALOG_SIZE:
         add(Action(ActionType.ROLL_DICE))  # unreachable slots
 
@@ -240,3 +267,20 @@ def monopoly_action(resource: Resource) -> Action:
 
 
 PLAY_VICTORY_POINT = CATALOG[253]
+
+
+def propose_trade_action(give: Resource, get: Resource, give_n: int) -> Action:
+    assert give != get
+    assert give_n in (1, 2)
+    p = 0
+    for g in Resource:
+        for r in Resource:
+            if g != r:
+                if g == give and r == get:
+                    return CATALOG[256 + p * 2 + (give_n - 1)]
+                p += 1
+    raise ValueError(f"Invalid trade pair: {give} -> {get}")
+
+
+ACCEPT_TRADE  = CATALOG[296]
+DECLINE_TRADE = CATALOG[297]
