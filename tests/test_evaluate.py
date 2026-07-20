@@ -125,7 +125,7 @@ def test_eval_kwargs_from_meta_dispatches_realistic_obs_mode(tmp_path):
     """A checkpoint trained in realistic mode must be evaluated with
     obs_mode='realistic' and a noise_cfg (defaulting to 0.25/0.5 when the
     checkpoint's own config doesn't specify belief_blend/belief_noise),
-    otherwise evaluate_vs_bots crashes with a shape mismatch (1520 vs 1549)
+    otherwise evaluate_vs_bots crashes with a shape mismatch (1548 vs 1577)
     because it silently defaults to self_play."""
     policy = _policy(seed=1, obs_mode="realistic")
     opt = torch.optim.Adam(policy.parameters())

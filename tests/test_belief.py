@@ -17,7 +17,9 @@ from catan_rl.env.game_state import GameState
 from catan_rl.env.actions import (
     Action, ActionType, Resource, DevCard,
     ROLL_DICE, road_action, steal_action, discard_action, monopoly_action,
+    propose_trade_action, ACCEPT_TRADE, DECLINE_TRADE,
 )
+from catan_rl.env.game_state import Phase
 from catan_rl.env.rules import apply_action
 from catan_rl.env.rules_profile import STANDARD
 from catan_rl.bots.random_bot import pick_action
@@ -230,6 +232,58 @@ def test_discard_subtracts_proportionally():
 
     assert np.allclose(tracker.expected(0), [1.5, 1.5, 0, 0, 0])
     assert tracker.uncertainty(0) > 0.0
+
+
+# ---------------------------------------------------------------------------
+# 4.5 P2P trade: ACCEPT_TRADE is a public-delta event -> zero drift, zero
+#     added hidden_mass, exact reconciliation for both proposer and accepter.
+# ---------------------------------------------------------------------------
+
+def test_executed_trade_reconciles_exactly():
+    config = BoardConfig.standard(seed=SEED)
+    state = GameState.new_game(config, n_players=4, seed=SEED, profile="standard_trading")
+    state.phase = Phase.MAIN
+    state.current_player = 0
+    state.rolled_this_turn = True
+
+    state.players[0].resources = [2, 0, 0, 0, 0]
+    for pid in (1, 2, 3):
+        state.players[pid].resources = [0, 1, 0, 0, 0]
+
+    # Anchor the tracker at this pre-trade snapshot: every hand is publicly
+    # known exactly (fresh reset), so hidden_mass starts at zero for everyone.
+    tracker = BeliefTracker(state)
+    for pid in range(4):
+        assert tracker.uncertainty(pid) == 0.0
+
+    rng = random.Random(0)
+
+    def step(action):
+        before = state.clone()
+        apply_action(state, action, rng)
+        tracker.on_action(before, action, state)
+
+    step(propose_trade_action(Resource.WOOD, Resource.BRICK, 2))
+    assert state.phase == Phase.TRADE_RESPONSE and state.current_player == 1
+    step(DECLINE_TRADE)
+    assert state.current_player == 2
+    step(ACCEPT_TRADE)
+    assert state.current_player == 3
+    step(ACCEPT_TRADE)
+
+    # First accepter in order (player 2) executes the trade.
+    assert state.phase == Phase.MAIN and state.current_player == 0
+    assert state.players[0].resources == [0, 1, 0, 0, 0]
+    assert state.players[2].resources == [2, 0, 0, 0, 0]
+    assert state.players[3].resources == [0, 1, 0, 0, 0]  # untouched
+
+    # Trades are public deltas: the tracker's belief must exactly match the
+    # true post-trade hands for both the proposer and the accepter, with no
+    # hidden mass introduced by any step in the propose/respond/execute walk.
+    assert np.allclose(tracker.expected(0), state.players[0].resources)
+    assert np.allclose(tracker.expected(2), state.players[2].resources)
+    for pid in range(4):
+        assert tracker.uncertainty(pid) == 0.0
 
 
 # ---------------------------------------------------------------------------
