@@ -179,6 +179,9 @@ def _build_need_bonus(state: "GameState", pid: int, r: int) -> float:
         if not _affords(before, cost) and _affords(after, cost):
             return 0.5
 
+    # Deliberate approximation: no legal-edge check (unlike the settlement
+    # reachability check above) -- a placeable edge almost always exists, and
+    # these are scripted opponents, not the trained policy.
     can_place_road = player.roads_available > 0
     if can_place_road:
         cost = BUILD_COSTS["road"]
@@ -197,7 +200,9 @@ def trade_margin(state: "GameState", pid: int, gain: Dict[int, int], lose: Dict[
     margin = 0.0
     for r, n in gain.items():
         r = int(r)
-        margin += n * (base_value(r) + _build_need_bonus(state, pid, r))
+        # The build-need bonus is a one-time +0.5 per resource ("gaining one
+        # r newly affords a build"), not scaled by the quantity gained.
+        margin += n * base_value(r) + _build_need_bonus(state, pid, r)
     for r, n in lose.items():
         margin -= n * base_value(int(r))
     return margin
@@ -226,7 +231,7 @@ def _decide_response(state: "GameState", personality: TradePersonality) -> Actio
     if personality.leader_block_vp is not None:
         proposer_vp = compute_vp(proposer, state)
         near_win = proposer_vp >= state.profile.win_vp - personality.leader_block_vp
-        if near_win or (proposer != me and _is_sole_leader(state, proposer)):
+        if near_win or _is_sole_leader(state, proposer):
             return DECLINE_TRADE
 
     gain = {give: give_n}

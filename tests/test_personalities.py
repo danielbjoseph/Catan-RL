@@ -2,6 +2,8 @@
 
 import random
 
+import pytest
+
 from catan_rl.bots.personalities import (
     PERSONALITIES,
     make_personality_bot,
@@ -58,6 +60,27 @@ def test_never_trader_never_proposes_or_accepts():
             )
             apply_action(state, action, rng)
             plies += 1
+
+
+def test_never_trader_declines_even_wildly_favorable_offer():
+    # Direct TRADE_RESPONSE coverage: full never_trader games never reach
+    # the response phase (nobody proposes), so the game-walk test above
+    # can't exercise accept_margin=inf. Pin it here: 2 wood for 1 brick at
+    # uniform values is a clear +1 margin, and never_trader still declines.
+    bot = make_personality_bot(PERSONALITIES["never_trader"])
+    for seed in range(3):
+        state = _response_state()
+        assert bot(state, random.Random(seed)).action_type == ActionType.DECLINE_TRADE
+
+
+def test_stall_the_leader_declines_sole_leader_below_block_window():
+    # Proposer is the unique VP leader at 5 VP -- well below the near-win
+    # line (win_vp - leader_block_vp = 8) -- with an attractive offer.
+    # The sole-leader clause alone must produce the decline.
+    bot = make_personality_bot(PERSONALITIES["stall_the_leader"])
+    state = _response_state()
+    state.players[0].settlements_built = 5
+    assert bot(state, random.Random(0)).action_type == ActionType.DECLINE_TRADE
 
 
 def test_stall_the_leader_declines_leader_adjacent_only():
@@ -140,6 +163,22 @@ def test_fair_dealer_band():
     }
     assert bot(lopsided, rng).action_type == ActionType.DECLINE_TRADE
 
+    # Lopsided AGAINST the responder: a one-sided rule (margin <= band,
+    # no abs) would accept this negative-margin offer; the band declines.
+    against = _response_state(seed=0)
+    against.players[1].settlement_vertices = {5}  # ore pips 5, brick pips 2
+    against.players[1].resources = [0, 1, 0, 0, 0]
+    against.pending_trade = {
+        "proposer": 0,
+        "give": int(Resource.ORE),
+        "get": int(Resource.BRICK),
+        "give_n": 1,
+        "responses": {1: None, 2: None, 3: None},
+    }
+    margin = trade_margin(against, 1, {int(Resource.ORE): 1}, {int(Resource.BRICK): 1})
+    assert margin < -personality.accept_band  # ~ -1/6
+    assert bot(against, rng).action_type == ActionType.DECLINE_TRADE
+
 
 def test_opportunist_accepts_negative_margin():
     personality = PERSONALITIES["opportunist"]
@@ -204,8 +243,42 @@ def test_mixed_personality_games_terminate_and_conserve():
 
 
 def test_plain_bots_decline():
+    # Multiple seeds: with the DECLINE branch removed, the rng.choice
+    # fallback happens to return DECLINE for Random(0), so a single-seed
+    # assertion would pass vacuously.
     for bot in (heuristic_bot, greedy_bot):
-        state = _response_state()
-        rng = random.Random(0)
-        action = bot.pick_action(state, rng)
-        assert action.action_type == ActionType.DECLINE_TRADE
+        for seed in range(5):
+            state = _response_state()
+            action = bot.pick_action(state, random.Random(seed))
+            assert action.action_type == ActionType.DECLINE_TRADE
+
+
+def test_resource_pips_city_doubles():
+    state = _response_state(seed=0)
+    p = state.players[1]
+    p.settlement_vertices = {5}
+    base = resource_pips(state, 1).copy()
+    assert base.sum() > 0
+    p.settlement_vertices = set()
+    p.city_vertices = {5}
+    assert (resource_pips(state, 1) == 2 * base).all()
+
+
+def test_build_need_bonus_applies_once():
+    # Gaining 1 ore at 2 wheat + 2 ore newly affords a city -> +0.5, applied
+    # once per resource regardless of quantity gained.
+    state = _response_state(seed=0)
+    p = state.players[1]
+    p.settlement_vertices = {5}  # enables the city-placement precondition
+    ore = int(Resource.ORE)
+    value_ore = 1.0 / (1.0 + resource_pips(state, 1)[ore])
+
+    p.resources = [0, 0, 0, 2, 2]  # 2 wheat, 2 ore: one ore short of a city
+    with_bonus = trade_margin(state, 1, {ore: 1}, {})
+    p.resources = [0, 0, 0, 2, 0]  # 2 ore short: gaining 1 doesn't afford it
+    without_bonus = trade_margin(state, 1, {ore: 1}, {})
+    assert with_bonus == pytest.approx(without_bonus + 0.5)
+
+    p.resources = [0, 0, 0, 2, 2]
+    gaining_two = trade_margin(state, 1, {ore: 2}, {})
+    assert gaining_two == pytest.approx(with_bonus + value_ore)  # bonus not doubled
