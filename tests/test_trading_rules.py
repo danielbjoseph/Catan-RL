@@ -2,8 +2,6 @@
 
 import random
 
-import pytest
-
 from catan_rl.env.action_mask import legal_action_mask
 from catan_rl.env.actions import (
     Resource, propose_trade_action, ACCEPT_TRADE, DECLINE_TRADE, END_TURN,
@@ -53,6 +51,8 @@ def test_full_response_walk_first_accepter_wins():
     rng = random.Random(0)
     apply_action(state, propose_trade_action(Resource.WOOD, Resource.BRICK, 2), rng)
     assert state.phase == Phase.TRADE_RESPONSE and state.current_player == 1
+    # In TRADE_RESPONSE the legal set is exactly {ACCEPT_TRADE, DECLINE_TRADE}.
+    assert sorted(a.catalog_index for a in legal_actions(state)) == [296, 297]
     apply_action(state, DECLINE_TRADE, rng)
     assert state.current_player == 2
     apply_action(state, ACCEPT_TRADE, rng)
@@ -63,6 +63,29 @@ def test_full_response_walk_first_accepter_wins():
     assert state.players[0].resources == [0, 1, 0, 0, 0]
     assert state.players[2].resources == [2, 0, 0, 0, 0]
     assert state.players[3].resources == [0, 1, 0, 0, 0]  # untouched
+
+
+def test_responder_order_wraps_past_seat_zero():
+    # Proposer 2: response walk must wrap 3 -> 0 -> 1, and among accepters
+    # seat 0 (earlier in wrap order) beats seat 1.
+    state = _trading_state()
+    state.current_player = 2
+    state.players[2].resources = [2, 0, 0, 0, 0]
+    for pid in (0, 1, 3):
+        state.players[pid].resources = [0, 1, 0, 0, 0]
+    rng = random.Random(0)
+    apply_action(state, propose_trade_action(Resource.WOOD, Resource.BRICK, 2), rng)
+    assert state.phase == Phase.TRADE_RESPONSE and state.current_player == 3
+    apply_action(state, DECLINE_TRADE, rng)
+    assert state.current_player == 0
+    apply_action(state, ACCEPT_TRADE, rng)
+    assert state.current_player == 1
+    apply_action(state, ACCEPT_TRADE, rng)
+    # First accepter in wrap order (0) executes; 1 untouched.
+    assert state.phase == Phase.MAIN and state.current_player == 2
+    assert state.players[2].resources == [0, 1, 0, 0, 0]
+    assert state.players[0].resources == [2, 0, 0, 0, 0]
+    assert state.players[1].resources == [0, 1, 0, 0, 0]
 
 
 def test_auto_decline_skips_broke_responders():

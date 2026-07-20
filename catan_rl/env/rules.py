@@ -361,7 +361,7 @@ def _maritime_trade(state: "GameState", give: Resource, get: Resource):
 # P2P trade sub-phase
 # ---------------------------------------------------------------------------
 
-def _responder_order(proposer: int, n_players: int) -> list:
+def _responder_order(proposer: int, n_players: int) -> list[int]:
     """Ascending seats starting at (proposer+1) % n_players, wrapping."""
     return [(proposer + i) % n_players for i in range(1, n_players)]
 
