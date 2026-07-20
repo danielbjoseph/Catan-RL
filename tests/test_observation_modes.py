@@ -175,6 +175,13 @@ class TestTradeBlock:
             if i not in resp_hot:
                 assert trade[i] == 0.0
 
+        # accepted state (+2): player 2 accepts; its rel slot (rel_i=0 for
+        # observer 2) flips from pending to accepted
+        apply_action(state, ACCEPT_TRADE, rng)
+        trade = make_observation(state, observer=observer, mode="self_play")[-_SEG_TRADE:]
+        assert trade[16 + 2] == 1.0
+        assert trade[16 + 0] == 0.0
+
     def test_trade_block_rotation(self):
         state = _trading_state()
         state.players[0].resources = [2, 0, 0, 0, 0]

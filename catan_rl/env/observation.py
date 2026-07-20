@@ -59,7 +59,9 @@ _N_EDGE = 72
 _N_PLAYERS = 4
 _N_RESOURCES = 5
 _N_DEV_CARDS = 5
-_N_PHASES = 12  # Phase enum has 12 members
+_N_PHASES = 12  # frozen at the v1 phase count: TRADE_RESPONSE (=12) encodes as an
+                # all-zero phase one-hot and is signaled by the trade block's active
+                # flag instead, preserving the v1 observation prefix
 
 # Segment sizes
 _SEG_HEX_RESOURCES = _N_HEX * 6        # 114  one-hot terrain type per hex
