@@ -48,6 +48,8 @@ _RUN_DEFAULTS = {
     "belief_noise": 0.5,
     "device": "cpu",
     "trace_every": None,
+    "opponents": None,
+    "n_policy_seats": 1,
 }
 
 
@@ -136,6 +138,8 @@ class SelfPlayTrainer:
                 trace_dir=self.trace_dir if self.trace_every else None,
                 trace_every=self.trace_every,
                 trace_prefix=f"iter{it:04d}_",
+                opponents=self.cfg["opponents"],
+                n_policy_seats=int(self.cfg["n_policy_seats"]),
             )
             stats = self.trainer.update(batch)
             elapsed = time.perf_counter() - t0
@@ -168,6 +172,11 @@ class SelfPlayTrainer:
         w.add_scalar("game/truncated_games", s["truncated_games"], it)
         w.add_scalar("perf/iteration_seconds", elapsed, it)
         w.add_scalar("perf/transitions_per_iteration", len(batch), it)
+
+        if "policy_win_rate" in s:
+            w.add_scalar("game/policy_win_rate", s["policy_win_rate"], it)
+            for label, rate in s["opponent_win_rates"].items():
+                w.add_scalar(f"game/win_rate_vs_{label}", rate, it)
 
         print(
             f"[iter {it:5d}] steps={len(batch):6d} "

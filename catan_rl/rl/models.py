@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from typing import Sequence, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ..env.actions import CATALOG_SIZE
+from ..env.actions import CATALOG_SIZE, DECLINE_TRADE
 from ..env.observation import OBS_DIM
 
 _MASK_VALUE = -1e9  # large negative instead of -inf keeps softmax/entropy finite
@@ -82,3 +83,26 @@ class ActorCritic(nn.Module):
         """Return (logprob, entropy, value) for given actions, with gradients."""
         dist, value = self._dist(obs, mask)
         return dist.log_prob(actions), dist.entropy(), value
+
+
+def act_prefix_sliced(
+    policy: ActorCritic,
+    obs: np.ndarray,
+    mask: np.ndarray,
+    device: str = "cpu",
+    deterministic: bool = True,
+) -> int:
+    """Act with a policy whose obs_dim/n_actions may be a PREFIX of the
+    current layout (old checkpoints). Slices obs/mask to the policy's dims;
+    if the sliced mask is empty (e.g. a 256-head policy asked to respond to
+    a trade), returns DECLINE_TRADE's index.
+    """
+    obs_sliced = obs[: policy.obs_dim]
+    mask_sliced = mask[: policy.n_actions]
+    if not mask_sliced.any():
+        return int(DECLINE_TRADE.catalog_index)
+
+    obs_t = torch.as_tensor(obs_sliced, dtype=torch.float32, device=device).unsqueeze(0)
+    mask_t = torch.as_tensor(mask_sliced, dtype=torch.bool, device=device).unsqueeze(0)
+    action, _, _ = policy.act(obs_t, mask_t, deterministic=deterministic)
+    return int(action.item())

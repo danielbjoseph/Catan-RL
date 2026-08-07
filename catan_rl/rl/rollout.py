@@ -11,19 +11,29 @@ flattened together for the PPO minibatch update.
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 
+from ..bots.personalities import PERSONALITIES, make_personality_bot
+from ..env.action_mask import legal_action_mask
 from ..env.actions import CATALOG, CATALOG_SIZE
+from ..env.observation import make_observation
 from ..env.pettingzoo_env import CatanAECEnv
 from ..env.rules_profile import RulesProfile
 from ..env.scoring import compute_vp
 from ..env.trace import TraceRecorder
-from .models import ActorCritic
+from .checkpointing import load_policy
+from .models import ActorCritic, act_prefix_sliced
+
+# Seat/opponent draws are seeded from `game_seed ^ _POOL_SEED_XOR`, kept
+# independent of the action RNG (`env._rng`, seeded from `game_seed` itself
+# a level down inside CatanAECEnv.reset).
+_POOL_SEED_XOR = 0x5EED
 
 
 @dataclass
@@ -86,6 +96,109 @@ class _SeatTrajectory:
         return len(self.actions)
 
 
+@dataclass
+class _PoolEntry:
+    """A resolved (pre-loaded) opponent-pool entry.
+
+    type == "personality": `bot_fn` is a `pick_action(state, rng) -> Action`
+    closure from `make_personality_bot`.
+    type == "checkpoint": `policy` is a loaded `ActorCritic`, `obs_mode` is
+    its own stored observation mode (may differ from the env's).
+    type == "self": acts with the live policy being trained, stochastically;
+    its transitions are never recorded.
+    """
+
+    type: str
+    weight: float
+    label: str
+    bot_fn: Optional[Callable] = None
+    policy: Optional[ActorCritic] = None
+    obs_mode: Optional[str] = None
+
+
+def _build_pool(pool_spec: List[Dict], env_obs_mode: str, device: str) -> List[_PoolEntry]:
+    """Resolve a raw `opponents["pool"]` spec into `_PoolEntry` objects once,
+    up front, so per-game seat draws are just a weighted choice over an
+    already-loaded list (no checkpoint I/O or personality lookups in the
+    hot per-game loop)."""
+    if not pool_spec:
+        raise ValueError("opponents['pool'] must be non-empty")
+
+    entries: List[_PoolEntry] = []
+    for spec in pool_spec:
+        kind = spec["type"]
+        weight = float(spec.get("weight", 1.0))
+
+        if kind == "personality":
+            name = spec["name"]
+            if name not in PERSONALITIES:
+                raise ValueError(f"unknown personality {name!r}")
+            entries.append(_PoolEntry(
+                type="personality", weight=weight, label=f"personality:{name}",
+                bot_fn=make_personality_bot(PERSONALITIES[name]),
+            ))
+        elif kind == "checkpoint":
+            path = spec["path"]
+            ckpt_policy, meta = load_policy(path, device=device)
+            ckpt_obs_mode = meta.get("obs_mode", "self_play")
+            if ckpt_obs_mode == "realistic" and env_obs_mode != "realistic":
+                raise ValueError(
+                    f"checkpoint {path!r} was trained with obs_mode='realistic', "
+                    f"which requires sharing the env's belief tracker; the env "
+                    f"obs_mode here is {env_obs_mode!r}, not 'realistic'."
+                )
+            ckpt_policy.eval()
+            entries.append(_PoolEntry(
+                type="checkpoint", weight=weight,
+                label=f"checkpoint:{Path(path).stem}",
+                policy=ckpt_policy, obs_mode=ckpt_obs_mode,
+            ))
+        elif kind == "self":
+            entries.append(_PoolEntry(type="self", weight=weight, label="self"))
+        else:
+            raise ValueError(f"unknown opponent pool entry type {kind!r}")
+
+    return entries
+
+
+def _observe_as(env: CatanAECEnv, pid: int, mode: str) -> np.ndarray:
+    """Build an observation for `pid` in an arbitrary `mode`, independent of
+    the env's own `obs_mode` (used for checkpoint opponents in the pool)."""
+    if mode == "realistic":
+        noise_cfg = {
+            "belief_blend": env.belief_blend,
+            "belief_noise": env.belief_noise,
+            "seed": env._seed,
+        }
+        return make_observation(
+            env._state, observer=pid, mode=mode, belief=env._belief, noise_cfg=noise_cfg,
+        )
+    return make_observation(env._state, observer=pid, mode=mode)
+
+
+def _act_opponent(
+    env: CatanAECEnv,
+    entry: _PoolEntry,
+    policy: ActorCritic,
+    rng: random.Random,
+    device: str,
+) -> int:
+    """Return a catalog action index for a non-policy (pool) seat."""
+    if entry.type == "personality":
+        return entry.bot_fn(env._state, rng).catalog_index
+    if entry.type == "checkpoint":
+        pid = env._state.current_player
+        obs = _observe_as(env, pid, entry.obs_mode)
+        mask = legal_action_mask(env._state)
+        return act_prefix_sliced(entry.policy, obs, mask, device=device, deterministic=True)
+    # "self": live policy, stochastic sample, transitions discarded by the caller.
+    obs_dict = env.observe(env.agent_selection)
+    obs_t = torch.as_tensor(obs_dict["observation"], dtype=torch.float32, device=device).unsqueeze(0)
+    mask_t = torch.as_tensor(obs_dict["action_mask"], dtype=torch.bool, device=device).unsqueeze(0)
+    action_t, _, _ = policy.act(obs_t, mask_t, deterministic=False)
+    return int(action_t.item())
+
+
 def collect_rollouts(
     policy: ActorCritic,
     n_games: int,
@@ -104,19 +217,36 @@ def collect_rollouts(
     trace_dir: Optional[Union[str, Path]] = None,
     trace_every: Optional[int] = None,
     trace_prefix: str = "",
+    opponents: Optional[Dict] = None,
+    n_policy_seats: int = 1,
 ) -> Batch:
-    """Play n_games of 4-seat self-play with a single shared policy.
+    """Play n_games of 4-seat Catan, optionally against an opponent pool.
 
     trace_dir / trace_every: opt-in game recording. When both are set, every
     game whose index `g` satisfies `g % trace_every == 0` is recorded with a
     TraceRecorder and saved to `trace_dir / f"{trace_prefix}game{g:04d}.json"`.
     When either is None (the default), no recorder is created and there is no
     extra state cloning/dict overhead in the hot loop.
+
+    opponents: None (default) is pure 4-seat self-play with one shared
+    policy -- byte-for-byte identical to the pre-pool behavior, with zero
+    pool machinery on the hot path. `{"pool": [entry, ...]}` switches on
+    opponent-pool mode: entries are
+    `{"type": "personality", "name": ..., "weight": w}`,
+    `{"type": "checkpoint", "path": ..., "weight": w}`, or
+    `{"type": "self", "weight": w}`. Per game `g`, policy seats are
+    `{(g + k) % 4 for k in range(n_policy_seats)}` (rotating); the remaining
+    seats each draw independently from the pool by weight, seeded from the
+    game seed so draws are reproducible and independent of the action RNG.
+    Transitions are collected ONLY from policy seats.
     """
     tracing_enabled = trace_dir is not None and trace_every is not None
     if tracing_enabled:
         trace_dir = Path(trace_dir)
         trace_dir.mkdir(parents=True, exist_ok=True)
+
+    pool_mode = opponents is not None
+    pool_entries = _build_pool(opponents["pool"], obs_mode, device) if pool_mode else None
 
     env = CatanAECEnv(
         obs_mode=obs_mode,
@@ -137,6 +267,12 @@ def collect_rollouts(
     vp_sums: List[float] = []
     truncated_games = 0
 
+    # Pool-mode bookkeeping: policy win rate and per-opponent-label win rate,
+    # left untouched (never even allocated) when opponents is None.
+    policy_wins = 0
+    label_games: Dict[str, int] = {}
+    label_wins: Dict[str, int] = {}
+
     policy.eval()
     for game_idx in range(n_games):
         game_seed = None if seed is None else seed + game_idx
@@ -151,8 +287,30 @@ def collect_rollouts(
                 {"seed": game_seed, "game_index": game_idx, "obs_mode": obs_mode},
             )
 
+        policy_seats: set = set()
+        seat_entry: Dict[int, _PoolEntry] = {}
+        opp_rng: Optional[random.Random] = None
+        if pool_mode:
+            policy_seats = {(game_idx + k) % 4 for k in range(n_policy_seats)}
+            pool_seed = (game_seed if game_seed is not None else game_idx) ^ _POOL_SEED_XOR
+            opp_rng = random.Random(pool_seed)
+            non_policy_seats = [s for s in range(4) if s not in policy_seats]
+            weights = [e.weight for e in pool_entries]
+            draws = opp_rng.choices(pool_entries, weights=weights, k=len(non_policy_seats))
+            seat_entry = dict(zip(non_policy_seats, draws))
+
         while not (all(env.terminations.values()) or all(env.truncations.values())):
             agent = env.agent_selection
+
+            if pool_mode:
+                pid = int(agent.split("_")[1])
+                if pid not in policy_seats:
+                    action_idx = _act_opponent(env, seat_entry[pid], policy, opp_rng, device)
+                    env.step(action_idx)
+                    if recorder is not None:
+                        recorder.record(CATALOG[action_idx], env._state)
+                    continue
+
             obs_dict = env.observe(agent)
             obs = obs_dict["observation"]
             mask = obs_dict["action_mask"]
@@ -186,6 +344,15 @@ def collect_rollouts(
             win_counts[state.winner] += 1
         vp_sums.append(float(np.mean([compute_vp(pid, state) for pid in range(4)])))
 
+        if pool_mode:
+            policy_won = state.winner is not None and state.winner in policy_seats
+            if policy_won:
+                policy_wins += 1
+            for label in {entry.label for entry in seat_entry.values()}:
+                label_games[label] = label_games.get(label, 0) + 1
+                if policy_won:
+                    label_wins[label] = label_wins.get(label, 0) + 1
+
         # Per-seat GAE: final transition carries the terminal reward, done=True.
         for seat_idx, agent in enumerate(env.agents):
             traj = seats[agent]
@@ -216,6 +383,11 @@ def collect_rollouts(
         "games_completed": n_games,
         "truncated_games": truncated_games,
     }
+    if pool_mode:
+        stats["policy_win_rate"] = policy_wins / n_games
+        stats["opponent_win_rates"] = {
+            label: label_wins.get(label, 0) / games for label, games in label_games.items()
+        }
 
     return Batch(
         obs=torch.as_tensor(np.stack(all_obs), dtype=torch.float32, device=device),
