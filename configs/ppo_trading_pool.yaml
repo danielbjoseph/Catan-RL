@@ -28,12 +28,12 @@ reward_win: 1.0
 reward_loss: -1.0
 
 # Observation mode (consumed by SelfPlayTrainer -> CatanAECEnv/evaluate/checkpointing):
-#   self_play (1520 floats) - exact self info, public opponent info only
-#   perfect   (1565 floats) - exact info for all players (Mode A / oracle)
-#   realistic (1549 floats) - self_play base + noised opponent-hand beliefs,
+#   self_play (1548 floats) - exact self info, public opponent info only
+#   perfect   (1593 floats) - exact info for all players (Mode A / oracle)
+#   realistic (1577 floats) - self_play base + noised opponent-hand beliefs,
 #                             believed dev-deck composition and bank; requires
 #                             a table-view BeliefTracker (env owns it automatically)
-#   global    (1576 floats) - perfect base + exact remaining dev-deck composition and bank
+#   global    (1604 floats) - perfect base + exact remaining dev-deck composition and bank
 obs_mode: self_play
 
 # realistic mode only: how strongly the believed opponent-hand vector is

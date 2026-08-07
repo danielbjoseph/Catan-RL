@@ -1,5 +1,8 @@
 """Tests for opponent-pool training (personality and checkpoint seats)."""
 
+import random
+from collections import defaultdict
+
 import numpy as np
 import pytest
 import torch
@@ -9,7 +12,7 @@ from catan_rl.env.observation import OBS_DIM, obs_dim_for_mode
 from catan_rl.env.rules_profile import RulesProfile
 from catan_rl.rl.checkpointing import save_checkpoint
 from catan_rl.rl.models import ActorCritic, act_prefix_sliced
-from catan_rl.rl.rollout import collect_rollouts
+from catan_rl.rl.rollout import _POOL_SEED_XOR, collect_rollouts
 
 FAST_TRADING = RulesProfile(
     name="fast_trading", dev_cards_enabled=False, win_vp=6, trades_enabled=True
@@ -94,6 +97,98 @@ class TestOpponentPool:
         )
         for seat, episode in zip(batch.seat_ids.tolist(), batch.episode_ids.tolist()):
             assert seat in {episode % 4, (episode + 1) % 4}
+
+    def test_self_pool_seat_transitions_are_never_recorded(self):
+        # Mixing a "self" entry into the pool: if self-seat transitions were
+        # ever accidentally recorded (a plausible "it's the same policy, so
+        # let's learn from it too" mistake), some seat value would fall
+        # outside the rotating policy-seat set.
+        policy = _tiny_policy()
+        opponents = {
+            "pool": [
+                {"type": "personality", "name": "never_trader", "weight": 1},
+                {"type": "self", "weight": 1},
+            ]
+        }
+        n_games = 6
+        batch = collect_rollouts(
+            policy, n_games=n_games, rules_profile=FAST_TRADING, seed=11, max_turns=60,
+            opponents=opponents, n_policy_seats=1,
+        )
+        for seat, episode in zip(batch.seat_ids.tolist(), batch.episode_ids.tolist()):
+            assert seat == episode % 4
+
+    def test_opponent_win_rate_denominator_is_per_label_games(self):
+        # Regression for a plausible bug: computing each label's win rate
+        # as label_wins/n_games instead of label_wins/label_games. Uses a
+        # 2-label, uneven-weight pool with n_policy_seats=3 (exactly one
+        # non-policy seat per game) so each game has exactly one label, and
+        # independently recomputes ground truth two ways without touching
+        # rollout.py's accumulation code:
+        #   - label per game: replicated from the documented seeding
+        #     contract (random.Random(game_seed ^ _POOL_SEED_XOR), same
+        #     weighted draw the brief specifies as reproducible/public).
+        #   - win/loss per game: a seat's LAST recorded transition in an
+        #     episode carries the terminal reward exactly, because GAE's
+        #     last step reduces to advantage = reward - value, so
+        #     return[-1] == reward for that transition regardless of
+        #     gamma/lambda.
+        pool_spec = [
+            {"type": "personality", "name": "never_trader", "weight": 3},
+            {"type": "personality", "name": "opportunist", "weight": 1},
+        ]
+        labels = ["personality:never_trader", "personality:opportunist"]
+        weights = [3, 1]
+        n_games = 24
+        seed = 42
+        # A low win_vp + enough turns/games so the policy actually wins some
+        # games -- with zero wins, wins/games and wins/n_games are both 0
+        # and the denominator bug this test targets is undetectable.
+        low_vp_profile = RulesProfile(
+            name="fast_trading_lowvp", dev_cards_enabled=False, win_vp=4, trades_enabled=True
+        )
+
+        policy = _tiny_policy()
+        batch = collect_rollouts(
+            policy, n_games=n_games, rules_profile=low_vp_profile, seed=seed, max_turns=150,
+            opponents={"pool": pool_spec}, n_policy_seats=3,
+        )
+
+        terminal_return = {}
+        for seat, ep, ret in zip(
+            batch.seat_ids.tolist(), batch.episode_ids.tolist(), batch.returns.tolist()
+        ):
+            terminal_return[(ep, seat)] = ret  # last write in append order = terminal step
+
+        expected_label_games = defaultdict(int)
+        expected_label_wins = defaultdict(int)
+        expected_policy_wins = 0
+        for g in range(n_games):
+            pool_seed = (seed + g) ^ _POOL_SEED_XOR
+            idx = random.Random(pool_seed).choices(range(len(pool_spec)), weights=weights, k=1)[0]
+            label = labels[idx]
+            policy_won = any(
+                terminal_return.get((g, s), 0.0) == pytest.approx(1.0, abs=1e-4)
+                for s in range(4)
+            )
+            expected_label_games[label] += 1
+            if policy_won:
+                expected_label_wins[label] += 1
+                expected_policy_wins += 1
+
+        assert len(expected_label_games) >= 2, "test setup should exercise >=2 distinct labels"
+        assert any(games < n_games for games in expected_label_games.values())
+        assert expected_policy_wins > 0, (
+            "test setup should produce >=1 policy win, else wins/games and "
+            "wins/n_games are both 0 and the denominator bug is undetectable"
+        )
+
+        assert batch.stats["policy_win_rate"] == pytest.approx(expected_policy_wins / n_games)
+        expected_rates = {
+            label: expected_label_wins.get(label, 0) / games
+            for label, games in expected_label_games.items()
+        }
+        assert batch.stats["opponent_win_rates"] == pytest.approx(expected_rates)
 
     def test_checkpoint_opponent_non_realistic_mode_runs(self, tmp_path):
         """A self_play-mode checkpoint opponent needs no belief tracker and
