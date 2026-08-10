@@ -128,18 +128,23 @@ class SelfPlayTrainer:
         if init_from is not None:
             old_policy, _ = load_policy(init_from)
             old_obs_dim, old_n_actions = old_policy.obs_dim, old_policy.n_actions
+            # Always route through widen_policy, even when the checkpoint is
+            # already at target dims (a no-op widen in that case): it's the
+            # single place that validates the checkpoint's hidden_sizes
+            # against the current run's config, so a mismatch is caught
+            # loudly instead of silently adopting the checkpoint's own
+            # architecture.
+            self.policy = widen_policy(
+                old_policy, obs_dim, CATALOG_SIZE,
+                new_hidden_sizes=self.ppo_cfg.hidden_sizes,
+            )
             if old_obs_dim < obs_dim or old_n_actions < CATALOG_SIZE:
-                self.policy = widen_policy(
-                    old_policy, obs_dim, CATALOG_SIZE,
-                    new_hidden_sizes=self.ppo_cfg.hidden_sizes,
-                )
                 print(
                     f"[init-from] widened {init_from}: "
                     f"obs_dim {old_obs_dim} -> {obs_dim}, "
                     f"n_actions {old_n_actions} -> {CATALOG_SIZE}"
                 )
             else:
-                self.policy = old_policy
                 print(f"[init-from] loaded {init_from} (already at target dims, no widening)")
 
         # Optimizer always starts fresh, whether or not init_from was used.

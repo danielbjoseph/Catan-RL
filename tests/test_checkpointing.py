@@ -133,6 +133,13 @@ def test_init_from_flag_smoke(tmp_path):
 
     old_policy = ActorCritic(obs_dim=1520, n_actions=256, hidden_sizes=(32, 32))
     old_opt = torch.optim.Adam(old_policy.parameters(), lr=1e-3)
+    # Give the old optimizer real Adam moment state, so the "fresh optimizer"
+    # assertion below is meaningful rather than trivially true because
+    # nothing was ever stepped.
+    logits, value = old_policy(torch.randn(4, 1520))
+    (logits.sum() + value.sum()).backward()
+    old_opt.step()
+    assert len(old_opt.state) > 0
     ckpt_path = save_checkpoint(
         tmp_path / "old_run" / "checkpoints", old_policy, old_opt,
         iteration=100, config={}, metrics={},
@@ -147,5 +154,31 @@ def test_init_from_flag_smoke(tmp_path):
     try:
         assert trainer.policy.obs_dim == 1548
         assert trainer.policy.n_actions == 512
+        # init_from must not carry over the old checkpoint's optimizer
+        # state (Adam moments/step count) -- warm-starting reuses only
+        # the weights, never the optimizer.
+        assert len(trainer.trainer.optimizer.state) == 0
     finally:
         trainer.close()
+
+
+def test_init_from_already_at_target_dims_still_validates_hidden_sizes(tmp_path):
+    """A checkpoint already at the current run's target obs/action dims
+    must still have its hidden_sizes validated against the run's config,
+    not silently adopted as-is."""
+    from catan_rl.rl.self_play import SelfPlayTrainer
+
+    full_dim_policy = ActorCritic(obs_dim=1548, n_actions=512, hidden_sizes=(32, 32))
+    opt = torch.optim.Adam(full_dim_policy.parameters(), lr=1e-3)
+    ckpt_path = save_checkpoint(
+        tmp_path / "old_run" / "checkpoints", full_dim_policy, opt,
+        iteration=100, config={}, metrics={},
+    )
+
+    with pytest.raises(ValueError):
+        SelfPlayTrainer(
+            {"obs_mode": "self_play", "hidden_sizes": [64, 64]},  # mismatched
+            run_dir=tmp_path / "new_run",
+            device="cpu",
+            init_from=ckpt_path,
+        )
