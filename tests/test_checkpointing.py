@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 import torch
 
 from catan_rl.rl.checkpointing import (
@@ -10,6 +11,7 @@ from catan_rl.rl.checkpointing import (
     load_checkpoint,
     load_policy,
     save_checkpoint,
+    widen_policy,
 )
 from catan_rl.rl.models import ActorCritic
 
@@ -94,3 +96,56 @@ def test_latest_and_list(tmp_path):
     assert list_checkpoints(tmp_path) == [p1, p2, p10]
     assert latest_checkpoint(tmp_path) == p10
     assert latest_checkpoint(tmp_path / "empty") is None
+
+
+def test_widen_preserves_old_function_exactly():
+    old = ActorCritic(obs_dim=1520, n_actions=256, hidden_sizes=(32, 32))
+    new = widen_policy(old, 1548, 512)
+
+    x_old = torch.randn(3, 1520)
+    x_new = torch.cat([x_old, torch.zeros(3, 28)], dim=1)
+    with torch.no_grad():
+        lo, vo = old(x_old)
+        ln, vn = new(x_new)
+
+    assert new.obs_dim == 1548
+    assert new.n_actions == 512
+    assert torch.allclose(lo, ln[:, :256], atol=1e-6)
+    assert torch.allclose(vo, vn, atol=1e-6)
+    assert torch.all(ln[:, 256:] == -4.0)  # zero weights + bias -4
+
+
+def test_widen_rejects_shrink_or_hidden_mismatch():
+    old = ActorCritic(obs_dim=1520, n_actions=256, hidden_sizes=(32, 32))
+
+    with pytest.raises(ValueError):
+        widen_policy(old, 1500, 512)  # obs_dim shrink
+
+    with pytest.raises(ValueError):
+        widen_policy(old, 1548, 200)  # n_actions shrink
+
+    with pytest.raises(ValueError):
+        widen_policy(old, 1548, 512, new_hidden_sizes=(64, 64))  # hidden_sizes mismatch
+
+
+def test_init_from_flag_smoke(tmp_path):
+    from catan_rl.rl.self_play import SelfPlayTrainer
+
+    old_policy = ActorCritic(obs_dim=1520, n_actions=256, hidden_sizes=(32, 32))
+    old_opt = torch.optim.Adam(old_policy.parameters(), lr=1e-3)
+    ckpt_path = save_checkpoint(
+        tmp_path / "old_run" / "checkpoints", old_policy, old_opt,
+        iteration=100, config={}, metrics={},
+    )
+
+    trainer = SelfPlayTrainer(
+        {"obs_mode": "self_play", "hidden_sizes": [32, 32]},
+        run_dir=tmp_path / "new_run",
+        device="cpu",
+        init_from=ckpt_path,
+    )
+    try:
+        assert trainer.policy.obs_dim == 1548
+        assert trainer.policy.n_actions == 512
+    finally:
+        trainer.close()

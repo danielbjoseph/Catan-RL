@@ -23,9 +23,16 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from ..bots import PERSONALITIES, greedy_bot, make_personality_bot, random_bot
+from ..env.actions import CATALOG_SIZE
 from ..env.observation import obs_dim_for_mode
 from ..env.rules_profile import RulesProfile
-from .checkpointing import latest_checkpoint, load_checkpoint, save_checkpoint
+from .checkpointing import (
+    latest_checkpoint,
+    load_checkpoint,
+    load_policy,
+    save_checkpoint,
+    widen_policy,
+)
 from .evaluate import evaluate_vs_bots, evaluate_vs_checkpoint
 from .models import ActorCritic
 from .ppo import PPOConfig, PPOTrainer
@@ -89,6 +96,7 @@ class SelfPlayTrainer:
         run_dir: Optional[Union[str, Path]] = None,
         device: Optional[str] = None,
         resume: bool = False,
+        init_from: Optional[Union[str, Path]] = None,
     ):
         self.cfg = _load_config(config)
         self.device = device or self.cfg["device"]
@@ -116,6 +124,25 @@ class SelfPlayTrainer:
 
         obs_dim = obs_dim_for_mode(self.cfg["obs_mode"])
         self.policy = ActorCritic(obs_dim=obs_dim, hidden_sizes=self.ppo_cfg.hidden_sizes)
+
+        if init_from is not None:
+            old_policy, _ = load_policy(init_from)
+            old_obs_dim, old_n_actions = old_policy.obs_dim, old_policy.n_actions
+            if old_obs_dim < obs_dim or old_n_actions < CATALOG_SIZE:
+                self.policy = widen_policy(
+                    old_policy, obs_dim, CATALOG_SIZE,
+                    new_hidden_sizes=self.ppo_cfg.hidden_sizes,
+                )
+                print(
+                    f"[init-from] widened {init_from}: "
+                    f"obs_dim {old_obs_dim} -> {obs_dim}, "
+                    f"n_actions {old_n_actions} -> {CATALOG_SIZE}"
+                )
+            else:
+                self.policy = old_policy
+                print(f"[init-from] loaded {init_from} (already at target dims, no widening)")
+
+        # Optimizer always starts fresh, whether or not init_from was used.
         self.trainer = PPOTrainer(self.policy, self.ppo_cfg, device=self.device)
         self.iteration = 0
 

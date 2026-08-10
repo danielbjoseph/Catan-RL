@@ -28,13 +28,18 @@ def main():
                         help="Override runs/<experiment_name>")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from the latest checkpoint in the run dir")
+    parser.add_argument("--init-from", default=None,
+                        help="Warm-start from a checkpoint at PATH, widening it "
+                             "to the current config's obs_dim/action-catalog size "
+                             "if smaller (optimizer starts fresh)")
     parser.add_argument("--trace", type=int, default=None,
                         help="Trace every Nth game of each iteration to "
                              "runs/<run_name>/traces/iter<k>_game<g>.json (default: off)")
     args = parser.parse_args()
 
     trainer = SelfPlayTrainer(
-        args.config, run_dir=args.run_dir, device=args.device, resume=args.resume
+        args.config, run_dir=args.run_dir, device=args.device, resume=args.resume,
+        init_from=args.init_from,
     )
     if args.trace is not None:
         trainer.trace_every = args.trace
