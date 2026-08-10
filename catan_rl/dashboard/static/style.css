@@ -168,6 +168,10 @@ html, body {
   font-size: 13px;
 }
 
+.trade-banner[hidden] {
+  display: none;
+}
+
 .trade-offer-line {
   display: flex;
   align-items: center;
