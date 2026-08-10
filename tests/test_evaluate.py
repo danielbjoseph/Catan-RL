@@ -198,6 +198,30 @@ def test_old_checkpoint_plays_in_trading_env(tmp_path):
     assert result["games"] == 1
 
 
+def test_old_checkpoint_plays_via_evaluate_vs_checkpoint(tmp_path):
+    """Same backcompat contract as test_old_checkpoint_plays_in_trading_env,
+    but exercised directly through evaluate_vs_checkpoint and
+    evaluate_policy_vs_policy rather than incidentally via evaluate_vs_bots
+    -- these share _policy_actor/policy_action, but a future change could
+    special-case one of the three eval functions without the others."""
+    old = ActorCritic(obs_dim=1520, n_actions=256, hidden_sizes=(32, 32))
+    opt = torch.optim.Adam(old.parameters())
+    ckpt = save_checkpoint(tmp_path, old, opt, 0, {}, {}, obs_mode="self_play")
+
+    current = _policy(seed=1)
+    result = evaluate_vs_checkpoint(
+        current, ckpt, n_games=2, rules_profile="standard_trading", max_turns=60,
+    )
+    assert result["games"] == 2
+
+    old_policy, _ = load_policy(ckpt)
+    result = evaluate_policy_vs_policy(
+        old_policy, "self_play", current, "self_play", n_games=2,
+        rules_profile="standard_trading", max_turns=60,
+    )
+    assert result["games"] == 2
+
+
 def test_eval_personalities_default_gating():
     """`eval_personalities: None` (the default) resolves to no personality
     opponents under a non-trading profile, and all 5 presets under a
