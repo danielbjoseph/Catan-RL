@@ -151,6 +151,63 @@ html, body {
   flex-wrap: wrap;
 }
 
+/* ---------------------------------------------------------------------- */
+/* Pending-trade banner                                                   */
+/* ---------------------------------------------------------------------- */
+
+.trade-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--accent-dim);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.trade-offer-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.trade-responses {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.seat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+}
+
+.resp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.resp-status { text-transform: capitalize; }
+
+.resp-chip.resp-pending .resp-status { color: var(--text-dim); }
+.resp-chip.resp-accepted { border-color: var(--good); }
+.resp-chip.resp-accepted .resp-status { color: var(--good); }
+.resp-chip.resp-declined { border-color: var(--bad); }
+.resp-chip.resp-declined .resp-status { color: var(--bad); }
+
 .ctrl-btn {
   background: var(--bg-inset);
   border: 1px solid var(--border);

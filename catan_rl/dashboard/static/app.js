@@ -420,6 +420,45 @@ function renderReadout(ply) {
     `ply ${ply.ply}/${plies.length - 1} · turn ${ply.turn} · phase ${ply.phase} · player ${seatLabel(ply.player)}`;
 }
 
+function seatChipHtml(pid) {
+  const seatVar = SEAT_VAR[pid % SEAT_VAR.length];
+  return `<span class="seat-chip"><span class="seat-swatch" style="background:var(${seatVar})"></span>` +
+    `${escapeHtml(seatLabel(pid))}</span>`;
+}
+
+function resChipHtml(ri) {
+  return `<span class="res-chip"><span class="res-dot" style="background:var(${RES_VAR[ri]})"></span>` +
+    `${escapeHtml(RESOURCE_NAMES[ri])}</span>`;
+}
+
+function renderTradeBanner(state) {
+  const banner = document.getElementById("trade-banner");
+  const trade = state.pending_trade;
+  if (!trade) {
+    banner.hidden = true;
+    banner.innerHTML = "";
+    return;
+  }
+  banner.hidden = false;
+
+  const offerHtml =
+    `<span class="trade-offer-line">${seatChipHtml(trade.proposer)} offers ` +
+    `${escapeHtml(String(trade.give_n))}&times; ${resChipHtml(trade.give)} for ` +
+    `1&times; ${resChipHtml(trade.get)}</span>`;
+
+  const respChips = state.players.map((_, pid) => {
+    if (pid === trade.proposer) return "";
+    const resp = trade.responses[String(pid)];
+    let status = "pending";
+    if (resp === true) status = "accepted";
+    else if (resp === false) status = "declined";
+    return `<span class="resp-chip resp-${status}">${seatChipHtml(pid)} ` +
+      `<span class="resp-status">${escapeHtml(status)}</span></span>`;
+  }).join("");
+
+  banner.innerHTML = offerHtml + `<span class="trade-responses">${respChips}</span>`;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Action log                                                             */
 /* ---------------------------------------------------------------------- */
@@ -466,6 +505,7 @@ function renderPly(i) {
   renderDynamicBoard(ply);
   renderPlayers(ply.state);
   renderBank(ply.state);
+  renderTradeBanner(ply.state);
   renderDice(currentPly);
   renderReadout(ply);
   highlightLogRow(currentPly);
