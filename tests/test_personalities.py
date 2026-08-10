@@ -10,7 +10,7 @@ from catan_rl.bots.personalities import (
     resource_pips,
     trade_margin,
 )
-from catan_rl.bots import greedy_bot, heuristic_bot
+from catan_rl.bots import greedy_bot, heuristic_bot, resolve_bot
 from catan_rl.env.actions import ActionType, Resource
 from catan_rl.env.board import BoardConfig
 from catan_rl.env.game_state import GameState, Phase
@@ -251,6 +251,19 @@ def test_plain_bots_decline():
             state = _response_state()
             action = bot.pick_action(state, random.Random(seed))
             assert action.action_type == ActionType.DECLINE_TRADE
+
+
+def test_resolve_bot_names():
+    valid_names = ["random", "greedy", "heuristic", *PERSONALITIES]
+    for name in valid_names:
+        bot = resolve_bot(name)
+        assert callable(bot)
+
+    with pytest.raises(ValueError) as excinfo:
+        resolve_bot("nope")
+    message = str(excinfo.value)
+    for name in valid_names:
+        assert name in message
 
 
 def test_resource_pips_city_doubles():

@@ -16,13 +16,13 @@ from __future__ import annotations
 import random
 import time
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from ..bots import greedy_bot, random_bot
+from ..bots import PERSONALITIES, greedy_bot, make_personality_bot, random_bot
 from ..env.observation import obs_dim_for_mode
 from ..env.rules_profile import RulesProfile
 from .checkpointing import latest_checkpoint, load_checkpoint, save_checkpoint
@@ -50,7 +50,23 @@ _RUN_DEFAULTS = {
     "trace_every": None,
     "opponents": None,
     "n_policy_seats": 1,
+    "eval_personalities": None,
 }
+
+
+def eval_personality_names(cfg: Dict, profile: RulesProfile) -> List[str]:
+    """Resolve the `"eval_personalities"` config key to a concrete list of
+    personality preset names to evaluate the policy against.
+
+    `None` (the default) means "all 5 presets when the rules profile has
+    trading enabled, else none" -- personality evaluation is meaningless
+    (and its bots never propose/accept) under a profile with trades off.
+    Any other value (e.g. an explicit list, or `[]`) is used as-is.
+    """
+    names = cfg.get("eval_personalities")
+    if names is None:
+        return list(PERSONALITIES.keys()) if profile.trades_enabled else []
+    return list(names)
 
 
 def _load_config(config: Union[str, Path, Dict]) -> Dict:
@@ -212,6 +228,12 @@ class SelfPlayTrainer:
             f"[eval {it:5d}] vs_random={vs_random['win_rate']:.2f} "
             f"vs_greedy={vs_greedy['win_rate']:.2f}"
         )
+
+        for name in eval_personality_names(self.cfg, self.profile):
+            bot = make_personality_bot(PERSONALITIES[name])
+            vs_personality = evaluate_vs_bots(self.policy, bot, n, **kwargs)
+            self.writer.add_scalar(f"eval/win_rate_vs_{name}", vs_personality["win_rate"], it)
+            msg += f" vs_{name}={vs_personality['win_rate']:.2f}"
 
         prev = latest_checkpoint(self.ckpt_dir)
         if prev is not None:

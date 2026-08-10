@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from catan_rl.bots import random_bot
+from catan_rl.bots import PERSONALITIES, random_bot, resolve_bot
 from catan_rl.env.observation import obs_dim_for_mode
 from catan_rl.env.rules_profile import RulesProfile
 from catan_rl.rl.evaluate import (
@@ -15,6 +15,7 @@ from catan_rl.rl.evaluate import (
 )
 from catan_rl.rl.checkpointing import load_policy, save_checkpoint
 from catan_rl.rl.models import ActorCritic
+from catan_rl.rl.self_play import eval_personality_names
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.evaluate_checkpoints import eval_kwargs_from_meta
@@ -176,6 +177,40 @@ def test_eval_kwargs_from_meta_self_play_has_no_noise_cfg(tmp_path):
     _, meta = load_policy(ckpt)
     kwargs = eval_kwargs_from_meta(meta)
     assert kwargs == {"obs_mode": "self_play", "noise_cfg": None}
+
+
+def test_old_checkpoint_plays_in_trading_env(tmp_path):
+    """A Package-A-shaped checkpoint (1520-obs/256-action, predating the
+    trade catalog/observation extensions) must still be usable as an eval
+    opponent inside the current 1548-obs/512-action trading env: obs/mask
+    are exact prefixes (Task 4 invariant), so `policy_action` slicing via
+    `act_prefix_sliced` must complete the game without a shape error, with
+    the old policy auto-declining any trade response it can't represent."""
+    old = ActorCritic(obs_dim=1520, n_actions=256, hidden_sizes=(32, 32))
+    opt = torch.optim.Adam(old.parameters())
+    ckpt = save_checkpoint(tmp_path, old, opt, 0, {}, {}, obs_mode="self_play")
+    policy, _ = load_policy(ckpt)
+
+    result = evaluate_vs_bots(
+        policy, resolve_bot("opportunist"), n_games=1,
+        rules_profile="standard_trading", max_turns=60,
+    )
+    assert result["games"] == 1
+
+
+def test_eval_personalities_default_gating():
+    """`eval_personalities: None` (the default) resolves to no personality
+    opponents under a non-trading profile, and all 5 presets under a
+    trading-enabled profile. An explicit list is passed through as-is."""
+    non_trading = RulesProfile.get("simplified_v1")
+    trading = RulesProfile.get("standard_trading")
+
+    assert eval_personality_names({"eval_personalities": None}, non_trading) == []
+    assert set(eval_personality_names({"eval_personalities": None}, trading)) == set(PERSONALITIES)
+
+    explicit = ["opportunist", "desperado"]
+    assert eval_personality_names({"eval_personalities": explicit}, non_trading) == explicit
+    assert eval_personality_names({"eval_personalities": []}, trading) == []
 
 
 def test_evaluate_policy_vs_policy_draws_on_truncation():

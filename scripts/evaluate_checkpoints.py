@@ -5,6 +5,8 @@ Usage:
   python scripts/evaluate_checkpoints.py --run runs/ppo_baseline
   python scripts/evaluate_checkpoints.py --run runs/ppo_baseline --games 50 --vs random,greedy,heuristic,prev
   python scripts/evaluate_checkpoints.py --ckpt runs/ppo_baseline/checkpoints/ckpt_000100.pt --vs greedy
+  python scripts/evaluate_checkpoints.py --ckpt runs/ppo_baseline/checkpoints/ckpt_000100.pt \
+      --vs never_trader,opportunist,stall_the_leader,fair_dealer,desperado --profile standard_trading
 """
 
 import argparse
@@ -13,19 +15,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from catan_rl.bots import greedy_bot, heuristic_bot, random_bot
+from catan_rl.bots import resolve_bot
 from catan_rl.rl.checkpointing import list_checkpoints, load_policy
 from catan_rl.rl.evaluate import (
     evaluate_policy_vs_policy,
     evaluate_vs_bots,
     evaluate_vs_checkpoint,
 )
-
-BOTS = {
-    "random": random_bot.pick_action,
-    "greedy": greedy_bot.pick_action,
-    "heuristic": heuristic_bot.pick_action,
-}
 
 _DEFAULT_BELIEF_BLEND = 0.25
 _DEFAULT_BELIEF_NOISE = 0.5
@@ -63,7 +59,9 @@ def main():
                         "(cross-mode policy-vs-policy evaluation; requires --ckpt)")
     parser.add_argument("--games", type=int, default=20)
     parser.add_argument("--vs", default="random,greedy",
-                        help="Comma list of: random,greedy,heuristic,prev")
+                        help="Comma list of: random,greedy,heuristic,prev, or any trade "
+                             "personality preset name (never_trader,opportunist,"
+                             "stall_the_leader,fair_dealer,desperado)")
     parser.add_argument("--profile", default="simplified_v1")
     parser.add_argument("--max-turns", type=int, default=500)
     parser.add_argument("--seed", type=int, default=0)
@@ -145,15 +143,17 @@ def main():
                     trace_dir=trace_dir, trace_every=args.trace, **kwargs,
                 )
                 row.append(f"{r['win_rate']:.2f}")
-            elif opp in BOTS:
+            else:
+                try:
+                    bot = resolve_bot(opp)
+                except ValueError as e:
+                    parser.error(str(e))
                 r = evaluate_vs_bots(
-                    policy, BOTS[opp], args.games,
+                    policy, bot, args.games,
                     obs_mode=ckpt_kwargs["obs_mode"], noise_cfg=ckpt_kwargs["noise_cfg"],
                     trace_dir=trace_dir, trace_every=args.trace, **kwargs,
                 )
                 row.append(f"{r['win_rate']:.2f} (vp={r['mean_vp']:.1f})")
-            else:
-                parser.error(f"unknown opponent {opp!r}")
         print("  ".join(f"{c:>18s}" for c in row))
         prev_path = ckpt
 
