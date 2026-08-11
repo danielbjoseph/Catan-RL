@@ -117,3 +117,25 @@ def test_parallel_2_workers_produces_valid_batch(policy, profile):
         std_adv = batch.advantages.std().item()
         assert abs(mean_adv) < 0.5, f"Expected mean ~0, got {mean_adv}"
         assert std_adv > 0.1, f"Expected std > 0.1, got {std_adv}"
+
+
+def test_self_play_trainer_runs_with_parallel_collection(tmp_path):
+    """End-to-end: SelfPlayTrainer should run successfully with parallel collection."""
+    from catan_rl.rl.self_play import SelfPlayTrainer
+
+    cfg = {
+        "experiment_name": "test_parallel_integration",
+        "seed": 42,
+        "iterations": 1,
+        "games_per_iteration": 4,
+        "num_workers": 2,
+        "eval_interval": 100,  # Skip eval in test
+        "checkpoint_interval": 100,  # Skip checkpoint in test
+        "device": "cpu",
+    }
+
+    trainer = SelfPlayTrainer(config=cfg, run_dir=str(tmp_path))
+    trainer.train(iterations=1)
+
+    # Just verify it completes without error
+    assert trainer.iteration == 1
