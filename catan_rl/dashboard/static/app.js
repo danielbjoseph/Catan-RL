@@ -214,7 +214,7 @@ function buildBoard() {
     }
   }
 
-  const center = geo.hex_centers[board.desert_hex] ? [0, 0] : [0, 0];
+  const center = [0, 0];
   (board.ports || []).forEach((port) => {
     const [va, vb] = port.vertices;
     const pa = vp[va], pb = vp[vb];
