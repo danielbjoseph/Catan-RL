@@ -12,7 +12,9 @@ flattened together for the PPO minibatch update.
 from __future__ import annotations
 
 import random
+import warnings
 from dataclasses import dataclass
+from multiprocessing import Pool, cpu_count
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
@@ -401,3 +403,157 @@ def collect_rollouts(
         episode_ids=torch.as_tensor(all_episodes, dtype=torch.long, device=device),
         stats=stats,
     )
+
+
+def _aggregate_stats(stats_list: List[Dict]) -> Dict:
+    """Merge stats dicts from multiple workers by summing numeric values.
+
+    All keys from all dicts are preserved. For numeric values, they are summed;
+    for non-numeric values, the first value is taken.
+    """
+    if not stats_list:
+        return {}
+
+    aggregated: Dict = {}
+
+    for stats in stats_list:
+        for key, value in stats.items():
+            if key not in aggregated:
+                aggregated[key] = value
+            else:
+                # Try to add numerically
+                try:
+                    aggregated[key] = aggregated[key] + value
+                except (TypeError, ValueError):
+                    # Non-numeric: keep the first value
+                    pass
+
+    return aggregated
+
+
+def _aggregate_batches(batches: List[Batch]) -> Batch:
+    """Concatenate batches along dim=0 (batch dimension).
+
+    Concatenates all tensor fields and merges stats dicts using _aggregate_stats().
+    """
+    if not batches:
+        raise ValueError("batches list cannot be empty")
+
+    # Concatenate tensors along dim=0
+    aggregated_batch = Batch(
+        obs=torch.cat([b.obs for b in batches], dim=0),
+        masks=torch.cat([b.masks for b in batches], dim=0),
+        actions=torch.cat([b.actions for b in batches], dim=0),
+        logprobs=torch.cat([b.logprobs for b in batches], dim=0),
+        values=torch.cat([b.values for b in batches], dim=0),
+        advantages=torch.cat([b.advantages for b in batches], dim=0),
+        returns=torch.cat([b.returns for b in batches], dim=0),
+        seat_ids=torch.cat([b.seat_ids for b in batches], dim=0),
+        episode_ids=torch.cat([b.episode_ids for b in batches], dim=0),
+        stats=_aggregate_stats([b.stats for b in batches]),
+    )
+
+    return aggregated_batch
+
+
+def collect_rollouts_parallel(
+    policy: ActorCritic,
+    n_games: int,
+    num_workers: Optional[int] = None,
+    rules_profile: Optional[RulesProfile] = None,
+    gamma: float = 0.99,
+    lam: float = 0.95,
+    max_turns: int = 500,
+    seed: int = 42,
+    opponent_pool: Optional[List[Dict]] = None,
+    trace_every: Optional[int] = None,
+    cfg: Optional[Dict] = None,
+) -> Batch:
+    """Collect game rollouts in parallel using multiprocessing.
+
+    If num_workers is None, auto-detect CPU count. If num_workers <= 1, fall back
+    to sequential collection using collect_rollouts(). Otherwise, creates a pool
+    and distributes games evenly across workers.
+
+    Args:
+        policy: The ActorCritic policy to use.
+        n_games: Number of games to collect.
+        num_workers: Number of worker processes. None = auto-detect CPU count.
+        rules_profile: Game rules profile.
+        gamma: Discount factor for GAE.
+        lam: Lambda parameter for GAE.
+        max_turns: Maximum turns per game.
+        seed: Random seed for reproducibility.
+        opponent_pool: Optional opponent pool spec.
+        trace_every: Optional trace recording interval.
+        cfg: Optional additional configuration.
+
+    Returns:
+        Aggregated Batch from all workers.
+    """
+    # Auto-detect CPU count if not specified
+    if num_workers is None:
+        num_workers = cpu_count()
+
+    # Fall back to sequential if num_workers <= 1
+    if num_workers <= 1:
+        return collect_rollouts(
+            policy=policy,
+            n_games=n_games,
+            rules_profile=rules_profile,
+            gamma=gamma,
+            lam=lam,
+            max_turns=max_turns,
+            seed=seed,
+            opponents=opponent_pool,
+        )
+
+    # Distribute games across workers (round-robin for remainder)
+    games_per_worker = [n_games // num_workers] * num_workers
+    for i in range(n_games % num_workers):
+        games_per_worker[i] += 1
+
+    # Prepare arguments for each worker
+    worker_args = []
+    for worker_id in range(num_workers):
+        worker_args.append(
+            (
+                worker_id,
+                games_per_worker[worker_id],
+                policy,
+                rules_profile,
+                gamma,
+                lam,
+                max_turns,
+                seed,
+                opponent_pool,
+                cfg,
+            )
+        )
+
+    # Create pool and collect results
+    try:
+        from ..rl.parallel_rollout import _worker_collect_games
+
+        with Pool(processes=num_workers) as pool:
+            batches = pool.starmap(_worker_collect_games, worker_args)
+
+        # Aggregate results
+        return _aggregate_batches(batches)
+
+    except Exception as e:
+        # Fall back to sequential collection on pool creation failure
+        warnings.warn(
+            f"Parallel pool creation failed ({e}), falling back to sequential collection.",
+            RuntimeWarning,
+        )
+        return collect_rollouts(
+            policy=policy,
+            n_games=n_games,
+            rules_profile=rules_profile,
+            gamma=gamma,
+            lam=lam,
+            max_turns=max_turns,
+            seed=seed,
+            opponents=opponent_pool,
+        )
