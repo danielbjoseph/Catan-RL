@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Union
 
 from catan_rl.env.rules_profile import RulesProfile
 from catan_rl.rl.models import ActorCritic
@@ -27,13 +28,22 @@ def _worker_collect_games(
     worker_id: int,
     n_games: int,
     policy: ActorCritic,
-    rules_profile: RulesProfile,
+    rules_profile: Union[str, RulesProfile, None],
     gamma: float,
     lam: float,
     max_turns: int,
-    seed_base: int,
-    opponent_pool: Optional[List[Dict]] = None,
-    cfg: Optional[Dict] = None,
+    seed_base: Optional[int],
+    device: str,
+    obs_mode: str,
+    reward_win: float,
+    reward_loss: float,
+    belief_blend: float,
+    belief_noise: float,
+    trace_dir: Optional[Union[str, Path]],
+    trace_every: Optional[int],
+    trace_prefix: str,
+    opponents: Optional[Dict],
+    n_policy_seats: int,
 ) -> Batch:
     """Collect games in a worker process.
 
@@ -49,17 +59,26 @@ def _worker_collect_games(
         lam: Lambda parameter for GAE.
         max_turns: Maximum turns per game.
         seed_base: Base seed for reproducibility.
-        opponent_pool: Optional opponent pool spec (format: {"pool": [...]}).
-        cfg: Optional additional configuration (reserved for future use).
+        device: Device to use for policy inference.
+        obs_mode: Observation mode ("self_play" or "realistic").
+        reward_win: Reward for winning.
+        reward_loss: Penalty for losing.
+        belief_blend: Belief tracker blending factor for realistic mode.
+        belief_noise: Belief tracker noise level for realistic mode.
+        trace_dir: Directory to save game traces.
+        trace_every: Interval for recording game traces.
+        trace_prefix: Prefix for trace filenames.
+        opponents: Opponent pool specification (format: {"pool": [...]}).
+        n_policy_seats: Number of seats controlled by the policy.
 
     Returns:
         A Batch containing the collected game data.
     """
     # Derive per-worker seed deterministically from worker_id and seed_base.
     # The XOR with (worker_id * 0x12345) ensures different seeds for different workers.
-    per_worker_seed = seed_base ^ (worker_id * 0x12345)
+    per_worker_seed = None if seed_base is None else seed_base ^ (worker_id * 0x12345)
 
-    # Collect rollouts for this worker.
+    # Collect rollouts for this worker, passing through all parameters.
     batch = collect_rollouts(
         policy,
         n_games,
@@ -68,7 +87,17 @@ def _worker_collect_games(
         lam=lam,
         max_turns=max_turns,
         seed=per_worker_seed,
-        opponents=opponent_pool,
+        device=device,
+        obs_mode=obs_mode,
+        reward_win=reward_win,
+        reward_loss=reward_loss,
+        belief_blend=belief_blend,
+        belief_noise=belief_noise,
+        trace_dir=trace_dir,
+        trace_every=trace_every,
+        trace_prefix=trace_prefix,
+        opponents=opponents,
+        n_policy_seats=n_policy_seats,
     )
 
     return batch

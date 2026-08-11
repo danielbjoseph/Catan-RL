@@ -460,20 +460,30 @@ def collect_rollouts_parallel(
     policy: ActorCritic,
     n_games: int,
     num_workers: Optional[int] = None,
-    rules_profile: Optional[RulesProfile] = None,
-    gamma: float = 0.99,
+    rules_profile: Union[str, RulesProfile, None] = "simplified_v1",
+    gamma: float = 0.999,
     lam: float = 0.95,
     max_turns: int = 500,
-    seed: int = 42,
-    opponent_pool: Optional[List[Dict]] = None,
+    seed: Optional[int] = None,
+    device: str = "cpu",
+    obs_mode: str = "self_play",
+    reward_win: float = 1.0,
+    reward_loss: float = -1.0,
+    belief_blend: float = 0.25,
+    belief_noise: float = 0.5,
+    trace_dir: Optional[Union[str, Path]] = None,
     trace_every: Optional[int] = None,
-    cfg: Optional[Dict] = None,
+    trace_prefix: str = "",
+    opponents: Optional[Dict] = None,
+    n_policy_seats: int = 1,
 ) -> Batch:
     """Collect game rollouts in parallel using multiprocessing.
 
     If num_workers is None, auto-detect CPU count. If num_workers <= 1, fall back
     to sequential collection using collect_rollouts(). Otherwise, creates a pool
     and distributes games evenly across workers.
+
+    All parameters are passed through to collect_rollouts() with identical semantics.
 
     Args:
         policy: The ActorCritic policy to use.
@@ -484,9 +494,17 @@ def collect_rollouts_parallel(
         lam: Lambda parameter for GAE.
         max_turns: Maximum turns per game.
         seed: Random seed for reproducibility.
-        opponent_pool: Optional opponent pool spec.
-        trace_every: Optional trace recording interval.
-        cfg: Optional additional configuration.
+        device: Device to use for policy inference.
+        obs_mode: Observation mode ("self_play" or "realistic").
+        reward_win: Reward for winning.
+        reward_loss: Penalty for losing.
+        belief_blend: Belief tracker blending factor for realistic mode.
+        belief_noise: Belief tracker noise level for realistic mode.
+        trace_dir: Directory to save game traces.
+        trace_every: Interval for recording game traces.
+        trace_prefix: Prefix for trace filenames.
+        opponents: Opponent pool specification.
+        n_policy_seats: Number of seats controlled by the policy.
 
     Returns:
         Aggregated Batch from all workers.
@@ -505,7 +523,17 @@ def collect_rollouts_parallel(
             lam=lam,
             max_turns=max_turns,
             seed=seed,
-            opponents=opponent_pool,
+            device=device,
+            obs_mode=obs_mode,
+            reward_win=reward_win,
+            reward_loss=reward_loss,
+            belief_blend=belief_blend,
+            belief_noise=belief_noise,
+            trace_dir=trace_dir,
+            trace_every=trace_every,
+            trace_prefix=trace_prefix,
+            opponents=opponents,
+            n_policy_seats=n_policy_seats,
         )
 
     # Distribute games across workers (round-robin for remainder)
@@ -526,8 +554,17 @@ def collect_rollouts_parallel(
                 lam,
                 max_turns,
                 seed,
-                opponent_pool,
-                cfg,
+                device,
+                obs_mode,
+                reward_win,
+                reward_loss,
+                belief_blend,
+                belief_noise,
+                trace_dir,
+                trace_every,
+                trace_prefix,
+                opponents,
+                n_policy_seats,
             )
         )
 
@@ -555,5 +592,15 @@ def collect_rollouts_parallel(
             lam=lam,
             max_turns=max_turns,
             seed=seed,
-            opponents=opponent_pool,
+            device=device,
+            obs_mode=obs_mode,
+            reward_win=reward_win,
+            reward_loss=reward_loss,
+            belief_blend=belief_blend,
+            belief_noise=belief_noise,
+            trace_dir=trace_dir,
+            trace_every=trace_every,
+            trace_prefix=trace_prefix,
+            opponents=opponents,
+            n_policy_seats=n_policy_seats,
         )

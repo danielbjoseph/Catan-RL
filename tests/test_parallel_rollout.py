@@ -28,6 +28,17 @@ class TestWorkerCollectGames:
             lam=0.95,
             max_turns=500,
             seed_base=123,
+            device="cpu",
+            obs_mode="self_play",
+            reward_win=1.0,
+            reward_loss=-1.0,
+            belief_blend=0.25,
+            belief_noise=0.5,
+            trace_dir=None,
+            trace_every=None,
+            trace_prefix="",
+            opponents=None,
+            n_policy_seats=1,
         )
 
         # Verify it's a Batch

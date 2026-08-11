@@ -180,8 +180,17 @@ class SelfPlayTrainer:
                 lam=self.ppo_cfg.gae_lambda,
                 max_turns=int(self.cfg["max_turns"]),
                 seed=int(self.cfg["seed"]) + it * games_per_iter,
-                opponent_pool=self.opponent_pool if hasattr(self, 'opponent_pool') else None,
+                device=self.device,
+                obs_mode=self.cfg["obs_mode"],
+                reward_win=float(self.cfg["reward_win"]),
+                reward_loss=float(self.cfg["reward_loss"]),
+                belief_blend=float(self.cfg["belief_blend"]),
+                belief_noise=float(self.cfg["belief_noise"]),
+                trace_dir=self.trace_dir,
                 trace_every=self.trace_every,
+                trace_prefix=self.cfg["experiment_name"],
+                opponents=self.cfg["opponents"],
+                n_policy_seats=int(self.cfg["n_policy_seats"]),
             )
             stats = self.trainer.update(batch)
             elapsed = time.perf_counter() - t0
