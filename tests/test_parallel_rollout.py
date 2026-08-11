@@ -182,3 +182,39 @@ class TestCollectRolloutsParallel:
         assert isinstance(batch, Batch)
         assert len(batch) > 0
         assert batch.stats["games_completed"] == 2
+
+
+class TestSelfPlayTrainerParallel:
+    def test_self_play_trainer_accepts_num_workers_config(self, tmp_path):
+        """Verify SelfPlayTrainer accepts num_workers in config."""
+        from catan_rl.rl.self_play import SelfPlayTrainer
+
+        # Create a minimal config with num_workers
+        config = {
+            "experiment_name": "test_parallel",
+            "seed": 42,
+            "iterations": 1,
+            "games_per_iteration": 2,
+            "num_workers": 2,
+            "rules_profile": "simplified_v1",
+            "max_turns": 500,
+            "reward_win": 1.0,
+            "reward_loss": -1.0,
+            "obs_mode": "self_play",
+            "belief_blend": 0.25,
+            "belief_noise": 0.5,
+            "device": "cpu",
+            "trace_every": None,
+            "opponents": None,
+            "n_policy_seats": 1,
+            "eval_personalities": None,
+            "eval_interval": 25,
+            "eval_games": 12,
+            "checkpoint_interval": 25,
+        }
+
+        # Initialize trainer with config containing num_workers
+        trainer = SelfPlayTrainer(config, run_dir=tmp_path)
+
+        # Verify num_workers is stored in config
+        assert trainer.cfg.get("num_workers") == 2

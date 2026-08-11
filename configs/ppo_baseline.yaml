@@ -17,6 +17,7 @@ experiment_name: ppo_baseline
 seed: 42
 iterations: 500
 games_per_iteration: 16
+num_workers: null  # null = auto-detect CPU count; set to integer to override
 eval_interval: 25          # iterations between eval passes
 eval_games: 12             # games per opponent during eval
 checkpoint_interval: 25    # iterations between checkpoints

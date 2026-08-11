@@ -36,13 +36,14 @@ from .checkpointing import (
 from .evaluate import evaluate_vs_bots, evaluate_vs_checkpoint
 from .models import ActorCritic
 from .ppo import PPOConfig, PPOTrainer
-from .rollout import collect_rollouts
+from .rollout import collect_rollouts, collect_rollouts_parallel
 
 _RUN_DEFAULTS = {
     "experiment_name": "ppo_baseline",
     "seed": 42,
     "iterations": 500,
     "games_per_iteration": 16,
+    "num_workers": None,
     "eval_interval": 25,
     "eval_games": 12,
     "checkpoint_interval": 25,
@@ -169,25 +170,18 @@ class SelfPlayTrainer:
             it = self.iteration
             t0 = time.perf_counter()
 
-            batch = collect_rollouts(
+            num_workers = self.cfg.get("num_workers")
+            batch = collect_rollouts_parallel(
                 self.policy,
                 n_games=games_per_iter,
+                num_workers=num_workers,
                 rules_profile=self.profile,
                 gamma=self.ppo_cfg.gamma,
                 lam=self.ppo_cfg.gae_lambda,
                 max_turns=int(self.cfg["max_turns"]),
                 seed=int(self.cfg["seed"]) + it * games_per_iter,
-                device=self.device,
-                obs_mode=self.cfg["obs_mode"],
-                reward_win=float(self.cfg["reward_win"]),
-                reward_loss=float(self.cfg["reward_loss"]),
-                belief_blend=float(self.cfg["belief_blend"]),
-                belief_noise=float(self.cfg["belief_noise"]),
-                trace_dir=self.trace_dir if self.trace_every else None,
+                opponent_pool=self.opponent_pool if hasattr(self, 'opponent_pool') else None,
                 trace_every=self.trace_every,
-                trace_prefix=f"iter{it:04d}_",
-                opponents=self.cfg["opponents"],
-                n_policy_seats=int(self.cfg["n_policy_seats"]),
             )
             stats = self.trainer.update(batch)
             elapsed = time.perf_counter() - t0
