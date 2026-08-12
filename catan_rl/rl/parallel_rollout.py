@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
+import numpy as np
+import torch
+
 from catan_rl.env.rules_profile import RulesProfile
 from catan_rl.rl.models import ActorCritic
 from catan_rl.rl.rollout import Batch, collect_rollouts
@@ -77,6 +80,12 @@ def _worker_collect_games(
     # Derive per-worker seed deterministically from worker_id and seed_base.
     # The XOR with (worker_id * 0x12345) ensures different seeds for different workers.
     per_worker_seed = None if seed_base is None else seed_base ^ (worker_id * 0x12345)
+
+    # Seed the RNG for numpy and torch to ensure determinism in worker process
+    if per_worker_seed is not None:
+        np.random.seed(per_worker_seed)
+        torch.manual_seed(per_worker_seed)
+        torch.set_num_threads(1)  # Prevent oversubscription with N workers × N threads
 
     # Collect rollouts for this worker, passing through all parameters.
     batch = collect_rollouts(

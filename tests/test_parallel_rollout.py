@@ -62,6 +62,61 @@ class TestWorkerCollectGames:
         assert batch.stats is not None
         assert batch.stats["games_completed"] == 1
 
+    def test_worker_collect_games_deterministic_with_same_seed(self):
+        """Worker should produce same batch with same seed across runs."""
+        policy = ActorCritic(obs_dim=OBS_DIM, hidden_sizes=(512, 512))
+        profile = RulesProfile.get("simplified_v1")
+
+        batch1 = _worker_collect_games(
+            worker_id=0,
+            n_games=2,
+            policy=policy,
+            rules_profile=profile,
+            gamma=0.99,
+            lam=0.95,
+            max_turns=500,
+            seed_base=42,
+            device="cpu",
+            obs_mode="self_play",
+            reward_win=1.0,
+            reward_loss=-1.0,
+            belief_blend=0.25,
+            belief_noise=0.5,
+            trace_dir=None,
+            trace_every=None,
+            trace_prefix="",
+            opponents=None,
+            n_policy_seats=1,
+        )
+
+        batch2 = _worker_collect_games(
+            worker_id=0,
+            n_games=2,
+            policy=policy,
+            rules_profile=profile,
+            gamma=0.99,
+            lam=0.95,
+            max_turns=500,
+            seed_base=42,
+            device="cpu",
+            obs_mode="self_play",
+            reward_win=1.0,
+            reward_loss=-1.0,
+            belief_blend=0.25,
+            belief_noise=0.5,
+            trace_dir=None,
+            trace_every=None,
+            trace_prefix="",
+            opponents=None,
+            n_policy_seats=1,
+        )
+
+        # Identical seeds should produce identical batches
+        assert len(batch1) == len(batch2)
+        assert torch.equal(batch1.obs, batch2.obs), "Observations differ"
+        assert torch.equal(batch1.actions, batch2.actions), "Actions differ"
+        assert torch.allclose(batch1.advantages, batch2.advantages), "Advantages differ"
+
 
 class TestParallelRolloutConfig:
     def test_config_defaults(self):
