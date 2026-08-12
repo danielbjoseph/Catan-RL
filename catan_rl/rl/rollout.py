@@ -406,29 +406,78 @@ def collect_rollouts(
 
 
 def _aggregate_stats(stats_list: List[Dict]) -> Dict:
-    """Merge stats dicts from multiple workers by summing numeric values.
-
-    All keys from all dicts are preserved. For numeric values, they are summed;
-    for non-numeric values, the first value is taken.
+    """
+    Merge stats dicts from multiple workers with per-key logic:
+    - Numeric counts (num_games, games_completed, total_turns): sum
+    - Means (mean_episode_length, mean_vp_at_end, policy_win_rate): weighted average by num_games/games_completed
+    - Lists (win_counts): sum element-wise
+    - Dicts (opponent_win_rates): weighted average by num_games/games_completed
     """
     if not stats_list:
         return {}
 
-    aggregated: Dict = {}
+    if len(stats_list) == 1:
+        return stats_list[0]
 
-    for stats in stats_list:
-        for key, value in stats.items():
-            if key not in aggregated:
-                aggregated[key] = value
+    result = {}
+    all_keys = set()
+    for s in stats_list:
+        all_keys.update(s.keys())
+
+    # Determine weighting key: prefer "num_games", fall back to "games_completed"
+    def get_game_count(s: Dict) -> int:
+        return s.get("num_games") or s.get("games_completed", 1)
+
+    total_games = sum(get_game_count(s) for s in stats_list)
+
+    for key in all_keys:
+        values = [s.get(key) for s in stats_list if key in s]
+
+        if not values:
+            result[key] = None
+            continue
+
+        # Determine key type and merge accordingly
+        if key in ("num_games", "games_completed", "total_turns", "truncated_games"):
+            # Sum counts
+            result[key] = sum(v for v in values if v is not None)
+
+        elif key in ("mean_episode_length", "mean_vp_at_end", "policy_win_rate"):
+            # Weighted average by num_games/games_completed
+            if total_games == 0:
+                result[key] = 0.0
             else:
-                # Try to add numerically
-                try:
-                    aggregated[key] = aggregated[key] + value
-                except (TypeError, ValueError):
-                    # Non-numeric: keep the first value
-                    pass
+                weighted_sum = sum(
+                    s.get(key, 0.0) * get_game_count(s)
+                    for s in stats_list if key in s
+                )
+                result[key] = weighted_sum / total_games
 
-    return aggregated
+        elif key == "win_counts" and isinstance(values[0], list):
+            # Sum element-wise for lists
+            result[key] = [sum(v[i] for v in values) for i in range(len(values[0]))]
+
+        elif key == "opponent_win_rates" and isinstance(values[0], dict):
+            # Weighted average for dicts
+            merged_dict = {}
+            all_opponents = set()
+            for d in values:
+                all_opponents.update(d.keys())
+
+            for opp in all_opponents:
+                weighted_sum = sum(
+                    s.get(key, {}).get(opp, 0.0) * get_game_count(s)
+                    for s in stats_list if key in s
+                )
+                merged_dict[opp] = weighted_sum / total_games if total_games > 0 else 0.0
+
+            result[key] = merged_dict
+
+        else:
+            # Default: take first non-None value
+            result[key] = next((v for v in values if v is not None), None)
+
+    return result
 
 
 def _aggregate_batches(batches: List[Batch]) -> Batch:

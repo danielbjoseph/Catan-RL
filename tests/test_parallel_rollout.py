@@ -180,7 +180,7 @@ class TestAggregateBatches:
 
 class TestAggregateStats:
     def test_aggregate_stats_sums_numeric_values(self):
-        """Verify _aggregate_stats sums numeric values."""
+        """Verify _aggregate_stats correctly handles count and mean fields."""
         from catan_rl.rl.rollout import _aggregate_stats
 
         stats_list = [
@@ -198,10 +198,48 @@ class TestAggregateStats:
 
         aggregated = _aggregate_stats(stats_list)
 
-        # Numeric values should be summed
+        # Count fields should be summed
         assert aggregated["games_completed"] == 30
         assert aggregated["truncated_games"] == 6
-        assert aggregated["mean_episode_length"] == 210.0
+        # Mean fields should be weighted-averaged: (100*10 + 110*20) / 30 = 106.67
+        assert abs(aggregated["mean_episode_length"] - 106.67) < 0.01
+
+    def test_aggregate_stats_correct_merge_logic(self):
+        """Stats should be merged correctly per key type."""
+        stats_list = [
+            {
+                "num_games": 2,
+                "mean_episode_length": 100.0,
+                "total_turns": 400,
+                "win_counts": [1, 0, 1, 0, 0, 0, 0, 0],
+                "opponent_win_rates": {"bot:random": 0.4},
+            },
+            {
+                "num_games": 2,
+                "mean_episode_length": 120.0,
+                "total_turns": 480,
+                "win_counts": [0, 1, 0, 1, 0, 0, 0, 0],
+                "opponent_win_rates": {"bot:random": 0.6},
+            },
+        ]
+
+        from catan_rl.rl.rollout import _aggregate_stats
+        merged = _aggregate_stats(stats_list)
+
+        # Counts should sum
+        assert merged["num_games"] == 4
+        assert merged["total_turns"] == 880
+
+        # Means should be weighted-averaged: (100*2 + 120*2) / 4 = 110
+        expected_mean_len = 110.0
+        assert abs(merged["mean_episode_length"] - expected_mean_len) < 0.01
+
+        # Win counts should sum element-wise
+        expected_counts = [1, 1, 1, 1, 0, 0, 0, 0]
+        assert merged["win_counts"] == expected_counts
+
+        # Opponent rates should be weighted-averaged: (0.4*2 + 0.6*2) / 4 = 0.5
+        assert abs(merged["opponent_win_rates"]["bot:random"] - 0.5) < 0.01
 
 
 class TestCollectRolloutsParallel:
