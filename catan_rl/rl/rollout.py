@@ -242,6 +242,11 @@ def collect_rollouts(
     game seed so draws are reproducible and independent of the action RNG.
     Transitions are collected ONLY from policy seats.
     """
+    # Seed the RNG for numpy and torch to ensure determinism
+    if seed is not None:
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+
     tracing_enabled = trace_dir is not None and trace_every is not None
     if tracing_enabled:
         trace_dir = Path(trace_dir)

@@ -325,6 +325,32 @@ class TestCollectRolloutsParallel:
         assert len(batch) > 0
         assert batch.stats["games_completed"] == 2
 
+    def test_collect_rollouts_parallel_caps_num_workers(self):
+        """Should cap num_workers at n_games internally and emit warning."""
+        import warnings
+        from catan_rl.rl.rollout import collect_rollouts_parallel
+
+        torch.manual_seed(0)
+        policy = ActorCritic(hidden_sizes=(64, 64))
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            batch = collect_rollouts_parallel(
+                policy=policy,
+                n_games=4,
+                num_workers=100,
+                rules_profile=FAST_PROFILE,
+                gamma=0.999,
+                lam=0.95,
+                max_turns=500,
+                seed=42,
+            )
+            assert len(batch) > 0, "Should complete successfully with capped num_workers"
+            assert batch.stats["games_completed"] == 4
+            # Check that warning was issued about capping
+            assert len(w) == 1, f"Expected 1 warning, got {len(w)}"
+            assert "Capping to" in str(w[0].message)
+
 
 class TestSelfPlayTrainerParallel:
     def test_self_play_trainer_accepts_num_workers_config(self, tmp_path):
