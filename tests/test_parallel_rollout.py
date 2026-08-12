@@ -177,6 +177,44 @@ class TestAggregateBatches:
         assert aggregated.episode_ids.shape == (15,)
         assert len(aggregated) == 15
 
+    def test_aggregate_batches_offsets_episode_ids(self):
+        """Episode IDs should be offset to be globally unique across workers."""
+        from catan_rl.rl.rollout import _aggregate_batches
+
+        batch1 = Batch(
+            obs=torch.randn(100, 100),
+            masks=torch.ones(100, 512, dtype=torch.bool),
+            actions=torch.randint(0, 512, (100,)),
+            logprobs=torch.randn(100),
+            values=torch.randn(100),
+            advantages=torch.randn(100),
+            returns=torch.randn(100),
+            seat_ids=torch.zeros(100, dtype=torch.long),
+            episode_ids=torch.tensor([0, 1, 2, 3] * 25, dtype=torch.long),
+            stats={"num_games": 4},
+        )
+
+        batch2 = Batch(
+            obs=torch.randn(120, 100),
+            masks=torch.ones(120, 512, dtype=torch.bool),
+            actions=torch.randint(0, 512, (120,)),
+            logprobs=torch.randn(120),
+            values=torch.randn(120),
+            advantages=torch.randn(120),
+            returns=torch.randn(120),
+            seat_ids=torch.zeros(120, dtype=torch.long),
+            episode_ids=torch.tensor([0, 1, 2, 3, 4] * 24, dtype=torch.long),
+            stats={"num_games": 5},
+        )
+
+        aggregated = _aggregate_batches([batch1, batch2])
+
+        unique_ids = torch.unique(aggregated.episode_ids)
+        assert len(unique_ids) == 9, f"Expected 9 unique episodes, got {len(unique_ids)}"
+
+        batch2_ids = aggregated.episode_ids[100:]
+        assert batch2_ids.min() >= 4, f"Batch2 min ID should be >= 4, got {batch2_ids.min()}"
+
 
 class TestAggregateStats:
     def test_aggregate_stats_sums_numeric_values(self):

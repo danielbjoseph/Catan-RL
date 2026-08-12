@@ -405,6 +405,22 @@ def collect_rollouts(
     )
 
 
+def _offset_episode_ids(batch: Batch, offset: int) -> Batch:
+    """Offset all episode_ids in batch by a fixed amount."""
+    return Batch(
+        obs=batch.obs,
+        masks=batch.masks,
+        actions=batch.actions,
+        logprobs=batch.logprobs,
+        values=batch.values,
+        advantages=batch.advantages,
+        returns=batch.returns,
+        seat_ids=batch.seat_ids,
+        episode_ids=batch.episode_ids + offset,
+        stats=batch.stats,
+    )
+
+
 def _aggregate_stats(stats_list: List[Dict]) -> Dict:
     """
     Merge stats dicts from multiple workers with per-key logic:
@@ -481,28 +497,43 @@ def _aggregate_stats(stats_list: List[Dict]) -> Dict:
 
 
 def _aggregate_batches(batches: List[Batch]) -> Batch:
-    """Concatenate batches along dim=0 (batch dimension).
+    """
+    Concatenate multiple Batch objects into a single aggregated Batch.
 
-    Concatenates all tensor fields and merges stats dicts using _aggregate_stats().
+    Offsets episode_ids to ensure global uniqueness: batch[i]'s episode_ids
+    are offset by (max_episode_id from all prior batches + 1).
     """
     if not batches:
-        raise ValueError("batches list cannot be empty")
+        raise ValueError("No batches to aggregate")
 
-    # Concatenate tensors along dim=0
-    aggregated_batch = Batch(
-        obs=torch.cat([b.obs for b in batches], dim=0),
-        masks=torch.cat([b.masks for b in batches], dim=0),
-        actions=torch.cat([b.actions for b in batches], dim=0),
-        logprobs=torch.cat([b.logprobs for b in batches], dim=0),
-        values=torch.cat([b.values for b in batches], dim=0),
-        advantages=torch.cat([b.advantages for b in batches], dim=0),
-        returns=torch.cat([b.returns for b in batches], dim=0),
-        seat_ids=torch.cat([b.seat_ids for b in batches], dim=0),
-        episode_ids=torch.cat([b.episode_ids for b in batches], dim=0),
-        stats=_aggregate_stats([b.stats for b in batches]),
+    if len(batches) == 1:
+        return batches[0]
+
+    # Offset episode_ids for all but first batch
+    offset_batches = [batches[0]]
+    current_max_episode_id = batches[0].episode_ids.max().item()
+
+    for batch in batches[1:]:
+        offset = current_max_episode_id + 1
+        offset_batch = _offset_episode_ids(batch, offset)
+        offset_batches.append(offset_batch)
+        current_max_episode_id = offset_batch.episode_ids.max().item()
+
+    # Concatenate all tensors along the batch dimension (dim 0)
+    aggregated = Batch(
+        obs=torch.cat([b.obs for b in offset_batches], dim=0),
+        masks=torch.cat([b.masks for b in offset_batches], dim=0),
+        actions=torch.cat([b.actions for b in offset_batches], dim=0),
+        logprobs=torch.cat([b.logprobs for b in offset_batches], dim=0),
+        values=torch.cat([b.values for b in offset_batches], dim=0),
+        advantages=torch.cat([b.advantages for b in offset_batches], dim=0),
+        returns=torch.cat([b.returns for b in offset_batches], dim=0),
+        seat_ids=torch.cat([b.seat_ids for b in offset_batches], dim=0),
+        episode_ids=torch.cat([b.episode_ids for b in offset_batches], dim=0),
+        stats=_aggregate_stats([b.stats for b in offset_batches]),
     )
 
-    return aggregated_batch
+    return aggregated
 
 
 def collect_rollouts_parallel(
