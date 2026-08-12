@@ -188,7 +188,7 @@ class SelfPlayTrainer:
                 belief_noise=float(self.cfg["belief_noise"]),
                 trace_dir=self.trace_dir,
                 trace_every=self.trace_every,
-                trace_prefix=self.cfg["experiment_name"],
+                trace_prefix=f"iter{it:04d}_",
                 opponents=self.cfg["opponents"],
                 n_policy_seats=int(self.cfg["n_policy_seats"]),
             )

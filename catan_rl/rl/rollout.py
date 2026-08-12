@@ -282,7 +282,7 @@ def collect_rollouts(
         seats = {agent: _SeatTrajectory() for agent in env.agents}
 
         recorder = None
-        if tracing_enabled and game_idx % trace_every == 0:
+        if tracing_enabled and trace_every and game_idx % trace_every == 0:
             recorder = TraceRecorder()
             recorder.start(
                 env._state,
@@ -593,6 +593,15 @@ def collect_rollouts_parallel(
     if num_workers is None:
         num_workers = cpu_count()
 
+    # Validate and cap num_workers at n_games
+    if num_workers > n_games:
+        warnings.warn(
+            f"num_workers ({num_workers}) > n_games ({n_games}). "
+            f"Capping to {n_games} to avoid idle workers.",
+            RuntimeWarning
+        )
+        num_workers = n_games
+
     # Fall back to sequential if num_workers <= 1
     if num_workers <= 1:
         return collect_rollouts(
@@ -623,11 +632,12 @@ def collect_rollouts_parallel(
 
     # Prepare arguments for each worker
     worker_args = []
-    for worker_id in range(num_workers):
+    for i in range(num_workers):
+        per_worker_trace_prefix = f"{trace_prefix}worker{i}_" if trace_prefix else ""
         worker_args.append(
             (
-                worker_id,
-                games_per_worker[worker_id],
+                i,
+                games_per_worker[i],
                 policy,
                 rules_profile,
                 gamma,
@@ -642,24 +652,20 @@ def collect_rollouts_parallel(
                 belief_noise,
                 trace_dir,
                 trace_every,
-                trace_prefix,
+                per_worker_trace_prefix,
                 opponents,
                 n_policy_seats,
             )
         )
 
     # Create pool and collect results
-    try:
-        from ..rl.parallel_rollout import _worker_collect_games
+    from ..rl.parallel_rollout import _worker_collect_games
 
+    try:
         with Pool(processes=num_workers) as pool:
             batches = pool.starmap(_worker_collect_games, worker_args)
-
-        # Aggregate results
-        return _aggregate_batches(batches)
-
     except Exception as e:
-        # Fall back to sequential collection on pool creation failure
+        # Only catch pool creation failures; worker failures should propagate
         warnings.warn(
             f"Parallel pool creation failed ({e}), falling back to sequential collection.",
             RuntimeWarning,
@@ -684,3 +690,6 @@ def collect_rollouts_parallel(
             opponents=opponents,
             n_policy_seats=n_policy_seats,
         )
+
+    # Aggregate results (outside try/except so worker errors propagate)
+    return _aggregate_batches(batches)
