@@ -2,12 +2,14 @@
 Train the shared self-play PPO policy.
 
 Usage:
-  python scripts/train_self_play.py --config configs/ppo_baseline.yaml
-  python scripts/train_self_play.py --config configs/ppo_baseline.yaml --iterations 100
-  python scripts/train_self_play.py --config configs/ppo_baseline.yaml --resume
-  python scripts/train_self_play.py --config configs/ppo_baseline.yaml --num-workers 4
+  python scripts/train_self_play.py configs/ppo_baseline.yaml
+  python scripts/train_self_play.py configs/ppo_baseline.yaml --iterations 100
+  python scripts/train_self_play.py configs/ppo_baseline.yaml --resume
+  python scripts/train_self_play.py configs/ppo_baseline.yaml --num-workers 4
 
 Monitor with:  tensorboard --logdir runs/
+
+Note: config is now a required positional argument (was --config flag in earlier versions).
 """
 
 import argparse
