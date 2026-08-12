@@ -2,14 +2,12 @@
 Train the shared self-play PPO policy.
 
 Usage:
-  python scripts/train_self_play.py configs/ppo_baseline.yaml
-  python scripts/train_self_play.py configs/ppo_baseline.yaml --iterations 100
-  python scripts/train_self_play.py configs/ppo_baseline.yaml --resume
-  python scripts/train_self_play.py configs/ppo_baseline.yaml --num-workers 4
+  python scripts/train_self_play.py --config configs/ppo_baseline.yaml
+  python scripts/train_self_play.py --config configs/ppo_baseline.yaml --iterations 100
+  python scripts/train_self_play.py --config configs/ppo_baseline.yaml --resume
+  python scripts/train_self_play.py --config configs/ppo_baseline.yaml --num-workers 4
 
 Monitor with:  tensorboard --logdir runs/
-
-Note: config is now a required positional argument (was --config flag in earlier versions).
 """
 
 import argparse
@@ -23,7 +21,8 @@ from catan_rl.rl.self_play import SelfPlayTrainer, _load_config
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("config", help="Path to config YAML file")
+    parser.add_argument("--config", default="configs/ppo_baseline.yaml",
+                        help="Path to config YAML file")
     parser.add_argument("--iterations", type=int, default=None,
                         help="Override the config's iteration count")
     parser.add_argument("--device", default=None, help="cpu or cuda")
