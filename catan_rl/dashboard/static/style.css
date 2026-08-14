@@ -470,6 +470,52 @@ html, body {
 .settlement-rect { stroke: #10131a; stroke-width: 0.02; }
 .city-shape { stroke: #10131a; stroke-width: 0.02; }
 
+.port-edge {
+  fill: none;
+  stroke: #333;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.port-edge.generic {
+  stroke: #666;
+}
+
+.port-edge.wheat {
+  stroke: #d4af37;
+}
+
+.port-edge.sheep {
+  stroke: #90ee90;
+}
+
+.port-edge.brick {
+  stroke: #d2691e;
+}
+
+.port-edge.ore {
+  stroke: #a9a9a9;
+}
+
+.port-edge.wood {
+  stroke: #228b22;
+}
+
+.vertex-claim-point {
+  fill: #f5f5dc;
+  stroke: #333;
+  stroke-width: 1;
+  r: 0.12;
+}
+
+.port-label {
+  font-size: 0.4em;
+  font-weight: bold;
+  text-anchor: middle;
+  dominant-baseline: central;
+  fill: #333;
+}
+
 @media (max-width: 900px) {
   #replay-layout {
     grid-template-columns: 1fr;
