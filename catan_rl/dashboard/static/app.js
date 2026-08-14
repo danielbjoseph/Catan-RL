@@ -224,7 +224,7 @@ function buildBoard() {
     // Determine port type for styling
     const portClass = port.resource === null || port.resource === undefined
       ? "generic"
-      : RESOURCE_ABBR[port.resource].toLowerCase();
+      : RESOURCE_NAMES[port.resource];
 
     // Draw thick line ON the edge (replaces old line + offset marker approach)
     const edgeLine = svgEl("line", {
