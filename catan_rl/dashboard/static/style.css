@@ -463,57 +463,52 @@ html, body {
 .token-text { font-size: 0.28px; fill: #2a2416; text-anchor: middle; dominant-baseline: central; font-weight: 600; }
 .token-text.hot { fill: #b5241a; font-weight: 800; }
 .robber-marker { fill: #201f24; stroke: #000; stroke-width: 0.02; }
-.port-marker { fill: #10131a; stroke: #cfd6e0; stroke-width: 0.015; }
-.port-text { font-size: 0.16px; fill: #cfd6e0; text-anchor: middle; dominant-baseline: central; }
-.port-line { stroke: #cfd6e0; stroke-width: 0.02; stroke-dasharray: 0.05 0.05; opacity: 0.6; }
 .road-line { stroke-linecap: round; }
 .settlement-rect { stroke: #10131a; stroke-width: 0.02; }
 .city-shape { stroke: #10131a; stroke-width: 0.02; }
 
 .port-edge {
   fill: none;
-  stroke: #333;
-  stroke-width: 2.5;
+  stroke-width: 0.12;
   stroke-linecap: round;
 }
 
 .port-edge.generic {
-  stroke: #666;
+  stroke: #999;
 }
 
 .port-edge.wheat {
-  stroke: #d4af37;
+  stroke: var(--wheat);
 }
 
 .port-edge.sheep {
-  stroke: #90ee90;
+  stroke: var(--sheep);
 }
 
 .port-edge.brick {
-  stroke: #d2691e;
+  stroke: var(--brick);
 }
 
 .port-edge.ore {
-  stroke: #a9a9a9;
+  stroke: var(--ore);
 }
 
 .port-edge.wood {
-  stroke: #228b22;
+  stroke: var(--wood);
 }
 
 .vertex-claim-point {
-  fill: #f5f5dc;
-  stroke: #333;
-  stroke-width: 1;
-  r: 0.12;
+  fill: #ddd;
+  stroke: #999;
+  stroke-width: 0.015;
 }
 
 .port-label {
-  font-size: 0.4em;
+  font-size: 0.16px;
   font-weight: bold;
   text-anchor: middle;
   dominant-baseline: central;
-  fill: #333;
+  fill: #cfd6e0;
 }
 
 @media (max-width: 900px) {

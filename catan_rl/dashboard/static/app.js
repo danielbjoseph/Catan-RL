@@ -238,6 +238,7 @@ function buildBoard() {
     [pa, pb].forEach((vertex) => {
       const claimDot = svgEl("circle", {
         cx: tx(vertex[0]), cy: ty(vertex[1]),
+        r: 0.12,
         class: "vertex-claim-point",
       });
       staticLayer.appendChild(claimDot);
