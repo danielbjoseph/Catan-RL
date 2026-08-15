@@ -16,3 +16,8 @@ checkpoints/
 Thumbs.db
 .DS_Store
 .superpowers/
+
+# Stray files
+scraper.py
+shared.js
+ui-game.js

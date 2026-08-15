@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Callable, Dict, Optional, Union
 
 import numpy as np
-import torch
 
 from ..env.action_mask import legal_action_mask
 from ..env.actions import CATALOG
@@ -25,7 +24,7 @@ from ..env.rules_profile import RulesProfile
 from ..env.scoring import compute_vp
 from ..env.trace import TraceRecorder
 from .checkpointing import load_policy
-from .models import ActorCritic
+from .models import ActorCritic, act_prefix_sliced
 
 BotFn = Callable[..., object]  # pick_action(state, rng) -> Action
 
@@ -39,16 +38,21 @@ def policy_action(
     belief: Optional[BeliefTracker] = None,
     noise_cfg: Optional[Dict] = None,
 ) -> int:
-    """Greedy catalog index for the current player of `state`."""
+    """Greedy catalog index for the current player of `state`.
+
+    Routes through `act_prefix_sliced` so a policy whose obs_dim/n_actions
+    is a strict prefix of the current layout (an old checkpoint, e.g.
+    Package A's 1520-obs/256-action policy running inside the current
+    1548-obs/512-action env) plays without a shape error: obs/mask are
+    sliced to the policy's own dims, and it auto-declines any trade
+    response it can't represent.
+    """
     obs = make_observation(
         state, observer=state.current_player, mode=obs_mode,
         belief=belief, noise_cfg=noise_cfg,
     )
     mask = legal_action_mask(state)
-    obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-    mask_t = torch.as_tensor(mask, dtype=torch.bool, device=device).unsqueeze(0)
-    action, _, _ = policy.act(obs_t, mask_t, deterministic=deterministic)
-    return int(action.item())
+    return act_prefix_sliced(policy, obs, mask, device=device, deterministic=deterministic)
 
 
 def _play_eval_game(

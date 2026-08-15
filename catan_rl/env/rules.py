@@ -61,6 +61,12 @@ def apply_action(state: "GameState", action: Action, rng: Optional[random.Random
         _play_monopoly(state, action.resource)
     elif t == ActionType.PLAY_VICTORY_POINT:
         _play_victory_point(state)
+    elif t == ActionType.PROPOSE_TRADE:
+        _propose_trade(state, action)
+    elif t == ActionType.ACCEPT_TRADE:
+        _respond_trade(state, True)
+    elif t == ActionType.DECLINE_TRADE:
+        _respond_trade(state, False)
     else:
         raise ValueError(f"Unknown action type: {t}")
 
@@ -332,6 +338,7 @@ def _end_turn(state: "GameState"):
     state.current_player = state.turn_number % state.n_players
     state.dice = None
     state.rolled_this_turn = False
+    state.trades_proposed_this_turn = 0
     state.phase = Phase.ROLL
 
 
@@ -348,6 +355,91 @@ def _maritime_trade(state: "GameState", give: Resource, get: Resource):
     state.bank[int(give)] += rate
     player.gain(get)
     state.bank[int(get)] -= 1
+
+
+# ---------------------------------------------------------------------------
+# P2P trade sub-phase
+# ---------------------------------------------------------------------------
+
+def _responder_order(proposer: int, n_players: int) -> list[int]:
+    """Ascending seats starting at (proposer+1) % n_players, wrapping."""
+    return [(proposer + i) % n_players for i in range(1, n_players)]
+
+
+def _find_next_pending(pending_trade: dict, order: list) -> Optional[int]:
+    for pid in order:
+        if pending_trade["responses"][pid] is None:
+            return pid
+    return None
+
+
+def _propose_trade(state: "GameState", action):
+    proposer = state.current_player
+    give = int(action.resource)
+    get = int(action.resource2)
+    give_n = action.give_n
+    state.trades_proposed_this_turn += 1
+
+    order = _responder_order(proposer, state.n_players)
+    responses = {}
+    for pid in order:
+        if state.players[pid].resources[get] >= 1:
+            responses[pid] = None
+        else:
+            responses[pid] = False  # can't afford to give the wanted resource; auto-decline
+
+    state.pending_trade = {
+        "proposer": proposer,
+        "give": give,
+        "get": get,
+        "give_n": give_n,
+        "responses": responses,
+    }
+
+    next_pid = _find_next_pending(state.pending_trade, order)
+    if next_pid is not None:
+        state.phase = Phase.TRADE_RESPONSE
+        state.current_player = next_pid
+    else:
+        _resolve_trade(state)
+
+
+def _respond_trade(state: "GameState", accept: bool):
+    pending = state.pending_trade
+    pid = state.current_player
+    pending["responses"][pid] = accept
+
+    order = _responder_order(pending["proposer"], state.n_players)
+    next_pid = _find_next_pending(pending, order)
+    if next_pid is not None:
+        state.current_player = next_pid
+    else:
+        _resolve_trade(state)
+
+
+def _resolve_trade(state: "GameState"):
+    pending = state.pending_trade
+    proposer = pending["proposer"]
+    give, get, give_n = pending["give"], pending["get"], pending["give_n"]
+    order = _responder_order(proposer, state.n_players)
+
+    accepter = None
+    for pid in order:
+        if pending["responses"][pid] is True:
+            accepter = pid
+            break
+
+    if accepter is not None:
+        proposer_player = state.players[proposer]
+        accepter_player = state.players[accepter]
+        proposer_player.resources[give] -= give_n
+        accepter_player.resources[give] += give_n
+        accepter_player.resources[get] -= 1
+        proposer_player.resources[get] += 1
+
+    state.pending_trade = None
+    state.current_player = proposer
+    state.phase = Phase.MAIN
 
 
 # ---------------------------------------------------------------------------

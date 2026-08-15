@@ -214,35 +214,53 @@ function buildBoard() {
     }
   }
 
-  const center = geo.hex_centers[board.desert_hex] ? [0, 0] : [0, 0];
   (board.ports || []).forEach((port) => {
     const [va, vb] = port.vertices;
     const pa = vp[va], pb = vp[vb];
+
+    // Port edge midpoint (on the actual edge between vertices)
     const mx = (pa[0] + pb[0]) / 2, my = (pa[1] + pb[1]) / 2;
-    let dx = mx - center[0], dy = my - center[1];
-    const len = Math.hypot(dx, dy) || 1;
-    dx /= len; dy /= len;
-    const markerX = mx + dx * 0.55, markerY = my + dy * 0.55;
 
-    const line = svgEl("line", {
-      x1: tx(mx), y1: ty(my), x2: tx(markerX), y2: ty(markerY), class: "port-line",
-    });
-    staticLayer.appendChild(line);
+    // Determine port type for styling
+    const portClass = port.resource === null || port.resource === undefined
+      ? "generic"
+      : RESOURCE_NAMES[port.resource];
 
-    const circle = svgEl("circle", {
-      cx: tx(markerX), cy: ty(markerY), r: 0.26, class: "port-marker",
+    // Draw thick line ON the edge (replaces old line + offset marker approach)
+    const edgeLine = svgEl("line", {
+      x1: tx(pa[0]), y1: ty(pa[1]),
+      x2: tx(pb[0]), y2: ty(pb[1]),
+      class: `port-edge ${portClass}`,
     });
+    staticLayer.appendChild(edgeLine);
+
+    // Draw small circles at each vertex to show settlement claim points
+    [pa, pb].forEach((vertex) => {
+      const claimDot = svgEl("circle", {
+        cx: tx(vertex[0]), cy: ty(vertex[1]),
+        r: 0.12,
+        class: "vertex-claim-point",
+      });
+      staticLayer.appendChild(claimDot);
+    });
+
+    // Draw port label at edge midpoint
+    const text = svgEl("text", {
+      x: tx(mx), y: ty(my),
+      class: "port-label",
+    });
+    text.textContent = port.resource === null || port.resource === undefined
+      ? "3:1"
+      : RESOURCE_ABBR[port.resource];
+
+    // Add tooltip showing full resource name
     const fullLabel = port.resource === null || port.resource === undefined
       ? "3:1 generic"
       : `${RESOURCE_NAMES[port.resource]} 2:1`;
     const title = svgEl("title", {});
     title.textContent = fullLabel;
-    circle.appendChild(title);
-    staticLayer.appendChild(circle);
+    text.appendChild(title);
 
-    const text = svgEl("text", { x: tx(markerX), y: ty(markerY), class: "port-text" });
-    text.textContent = port.resource === null || port.resource === undefined
-      ? "3:1" : RESOURCE_ABBR[port.resource];
     staticLayer.appendChild(text);
   });
 
@@ -420,6 +438,45 @@ function renderReadout(ply) {
     `ply ${ply.ply}/${plies.length - 1} · turn ${ply.turn} · phase ${ply.phase} · player ${seatLabel(ply.player)}`;
 }
 
+function seatChipHtml(pid) {
+  const seatVar = SEAT_VAR[pid % SEAT_VAR.length];
+  return `<span class="seat-chip"><span class="seat-swatch" style="background:var(${seatVar})"></span>` +
+    `${escapeHtml(seatLabel(pid))}</span>`;
+}
+
+function resChipHtml(ri) {
+  return `<span class="res-chip"><span class="res-dot" style="background:var(${RES_VAR[ri]})"></span>` +
+    `${escapeHtml(RESOURCE_NAMES[ri])}</span>`;
+}
+
+function renderTradeBanner(state) {
+  const banner = document.getElementById("trade-banner");
+  const trade = state.pending_trade;
+  if (!trade) {
+    banner.hidden = true;
+    banner.innerHTML = "";
+    return;
+  }
+  banner.hidden = false;
+
+  const offerHtml =
+    `<span class="trade-offer-line">${seatChipHtml(trade.proposer)} offers ` +
+    `${escapeHtml(String(trade.give_n))}&times; ${resChipHtml(trade.give)} for ` +
+    `1&times; ${resChipHtml(trade.get)}</span>`;
+
+  const respChips = state.players.map((_, pid) => {
+    if (pid === trade.proposer) return "";
+    const resp = trade.responses[String(pid)];
+    let status = "pending";
+    if (resp === true) status = "accepted";
+    else if (resp === false) status = "declined";
+    return `<span class="resp-chip resp-${status}">${seatChipHtml(pid)} ` +
+      `<span class="resp-status">${escapeHtml(status)}</span></span>`;
+  }).join("");
+
+  banner.innerHTML = offerHtml + `<span class="trade-responses">${respChips}</span>`;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Action log                                                             */
 /* ---------------------------------------------------------------------- */
@@ -466,6 +523,7 @@ function renderPly(i) {
   renderDynamicBoard(ply);
   renderPlayers(ply.state);
   renderBank(ply.state);
+  renderTradeBanner(ply.state);
   renderDice(currentPly);
   renderReadout(ply);
   highlightLogRow(currentPly);

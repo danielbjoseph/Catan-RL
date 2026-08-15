@@ -5,11 +5,11 @@ Presents the environment as a single-agent Gym env from the perspective of
 whichever player is currently acting.  Suitable for current-player RL training.
 
 Observation space: Box(shape=(OBS_DIM,), dtype=float32)
-Action space:      Discrete(256)
+Action space:      Discrete(CATALOG_SIZE)
 
 The observation dict returned by the AEC env is unwrapped so that:
   obs  = np.ndarray  shape (OBS_DIM,)
-  info = {"action_mask": np.ndarray(256, bool), "current_player": int}
+  info = {"action_mask": np.ndarray(CATALOG_SIZE, bool), "current_player": int}
 """
 
 from __future__ import annotations

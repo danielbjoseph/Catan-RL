@@ -2,18 +2,41 @@
 Observation generator for the Catan environment.
 
 Modes:
-  "self_play"  (Mode B) -- exact self info, public opponent info; OBS_DIM = 1520
-  "perfect"    (Mode A) -- all players' exact info exposed;      OBS_DIM_PERFECT = 1565
+  "self_play"  (Mode B) -- exact self info, public opponent info; OBS_DIM = 1548
+  "perfect"    (Mode A) -- all players' exact info exposed;      OBS_DIM_PERFECT = 1593
   "realistic"  -- self_play base + noised opponent-hand beliefs, believed
                   dev-deck composition, and bank; requires a BeliefTracker.
-                  OBS_DIM_REALISTIC = 1549
+                  OBS_DIM_REALISTIC = 1577
   "global"     -- perfect base + exact remaining dev-deck composition and
-                  bank; no tracker needed. OBS_DIM_GLOBAL = 1576
+                  bank; no tracker needed. OBS_DIM_GLOBAL = 1604
 
 The observation is always encoded relative to the observing player so that a
 shared policy sees a consistent layout regardless of seat position.
 Player slot 0 in the vector always corresponds to the observer; slots 1-3 are
 next-clockwise opponents.
+
+Every mode's vector ends with a fixed 28-dim pending-trade block (see
+`_SEG_TRADE`), appended AFTER all mode-specific extras -- i.e. at the
+absolute end of the vector. This block is computed identically regardless of
+mode, and its layout is:
+  [0]      active flag: 1.0 iff `state.pending_trade is not None`
+  [1:5]    proposer one-hot, rotated: rel = (proposer - observer) % 4
+  [5:10]   give-resource one-hot
+  [10:15]  get-resource one-hot
+  [15]     give_n / 2.0
+  [16:28]  per-seat response state: for rel_i in 0..3 (rel_i = (pid -
+           observer) % 4), a 3-way one-hot at offset 16 + rel_i*3:
+             +0 pending/none, +1 declined, +2 accepted
+           The "pending/none" state is deliberately hot even when there is no
+           pending trade at all (and for the proposer's own slot, which never
+           has a response entry), so the block is never all-zero -- an
+           all-zero trade block would be ambiguous between "no trade" and
+           "vector truncated/garbage", whereas a block with the idle
+           encoding is always a well-formed, unambiguous state.
+Because the block is appended last, the first `old_dim` entries of every
+mode's vector are bit-identical to the pre-trade-block encoding (see the
+golden fixture regression tests) -- this prefix invariant is load-bearing
+for downstream checkpoint-compatibility code.
 """
 
 from __future__ import annotations
@@ -36,7 +59,9 @@ _N_EDGE = 72
 _N_PLAYERS = 4
 _N_RESOURCES = 5
 _N_DEV_CARDS = 5
-_N_PHASES = 12  # Phase enum has 12 members
+_N_PHASES = 12  # frozen at the v1 phase count: TRADE_RESPONSE (=12) encodes as an
+                # all-zero phase one-hot and is signaled by the trade block's active
+                # flag instead, preserving the v1 observation prefix
 
 # Segment sizes
 _SEG_HEX_RESOURCES = _N_HEX * 6        # 114  one-hot terrain type per hex
@@ -49,25 +74,26 @@ _SEG_CITIES        = _N_VERTEX * 5     # 270  one-hot city owner
 _SEG_PUBLIC        = _N_PLAYERS * 14   # 56   public per-player features (rotated)
 _SEG_SELF_PRIV     = _N_RESOURCES * 3  # 15   self resources / dev_cards / new_cards
 _SEG_CTX           = 4 + _N_PHASES + 2 + 1  # 19  turn context
+_SEG_TRADE         = 28  # pending-trade block, appended at the absolute end of every mode
 
 OBS_DIM = (
     _SEG_HEX_RESOURCES + _SEG_HEX_TOKENS + _SEG_PORT_VERTICES
     + _SEG_ROBBER + _SEG_ROADS + _SEG_SETTLEMENTS + _SEG_CITIES
-    + _SEG_PUBLIC + _SEG_SELF_PRIV + _SEG_CTX
-)  # = 1520
+    + _SEG_PUBLIC + _SEG_SELF_PRIV + _SEG_CTX + _SEG_TRADE
+)  # = 1548
 
 # Mode A adds the 3 opponents' private info (15 floats each)
-OBS_DIM_PERFECT = OBS_DIM + 3 * _SEG_SELF_PRIV  # = 1565
+OBS_DIM_PERFECT = OBS_DIM + 3 * _SEG_SELF_PRIV  # = 1593
 
 # Realistic mode: per opponent, noised expected-hand (5) + uncertainty (1);
 # plus believed dev-deck composition (5) + count (1); plus bank (5).
 _SEG_REALISTIC_OPPONENTS = (_N_PLAYERS - 1) * (_N_RESOURCES + 1)  # 18
 _SEG_DEV_DECK = _N_DEV_CARDS + 1  # 6  composition + remaining count
 _SEG_BANK = _N_RESOURCES  # 5
-OBS_DIM_REALISTIC = OBS_DIM + _SEG_REALISTIC_OPPONENTS + _SEG_DEV_DECK + _SEG_BANK  # = 1549
+OBS_DIM_REALISTIC = OBS_DIM + _SEG_REALISTIC_OPPONENTS + _SEG_DEV_DECK + _SEG_BANK  # = 1577
 
 # Global mode: exact dev-deck composition (5) + count (1); plus bank (5).
-OBS_DIM_GLOBAL = OBS_DIM_PERFECT + _SEG_DEV_DECK + _SEG_BANK  # = 1576
+OBS_DIM_GLOBAL = OBS_DIM_PERFECT + _SEG_DEV_DECK + _SEG_BANK  # = 1604
 
 
 def obs_dim_for_mode(mode: str) -> int:
@@ -172,9 +198,9 @@ def make_observation(
     Build a fixed-size float32 observation for the given observer seat.
 
     observer: 0-3 player seat index
-    mode: "self_play" -> OBS_DIM=1520; "perfect" -> OBS_DIM_PERFECT=1565;
-          "realistic" -> OBS_DIM_REALISTIC=1549 (requires `belief`);
-          "global" -> OBS_DIM_GLOBAL=1576
+    mode: "self_play" -> OBS_DIM=1548; "perfect" -> OBS_DIM_PERFECT=1593;
+          "realistic" -> OBS_DIM_REALISTIC=1577 (requires `belief`);
+          "global" -> OBS_DIM_GLOBAL=1604
     belief: required BeliefTracker instance when mode == "realistic"
     noise_cfg: optional {"belief_blend": float, "belief_noise": float, "seed": int}
                applied to each opponent's expected-hand vector (realistic mode only)
@@ -327,5 +353,21 @@ def make_observation(
         opp_blocks.append(bank_block)
 
         obs = np.concatenate([obs] + opp_blocks)
+
+    # ---- pending-trade block: 28 floats, appended last for every mode ----
+    trade = np.zeros(_SEG_TRADE, dtype=np.float32)
+    pt = state.pending_trade
+    if pt is not None:
+        trade[0] = 1.0
+        trade[1 + (pt["proposer"] - observer) % _N_PLAYERS] = 1.0
+        trade[5 + pt["give"]] = 1.0
+        trade[10 + pt["get"]] = 1.0
+        trade[15] = pt["give_n"] / 2.0
+    for rel_i in range(_N_PLAYERS):
+        pid = (observer + rel_i) % _N_PLAYERS
+        resp = pt["responses"].get(pid) if pt is not None else None
+        off = 16 + rel_i * 3
+        trade[off + (0 if resp is None else (1 if resp is False else 2))] = 1.0
+    obs = np.concatenate([obs, trade])
 
     return obs

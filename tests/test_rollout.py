@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import torch
 
+from catan_rl.env.actions import CATALOG_SIZE
 from catan_rl.env.observation import OBS_DIM
 from catan_rl.env.rules_profile import RulesProfile
 from catan_rl.rl.models import ActorCritic
@@ -58,7 +59,7 @@ class TestCollectRollouts:
         for t in (batch.actions, batch.logprobs, batch.values,
                   batch.advantages, batch.returns, batch.seat_ids, batch.episode_ids):
             assert t.shape == (n,)
-        assert batch.masks.shape == (n, 256)
+        assert batch.masks.shape == (n, CATALOG_SIZE)
 
     def test_stats(self, batch):
         s = batch.stats

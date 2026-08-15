@@ -16,26 +16,34 @@ from __future__ import annotations
 import random
 import time
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from ..bots import greedy_bot, random_bot
+from ..bots import PERSONALITIES, greedy_bot, make_personality_bot, random_bot
+from ..env.actions import CATALOG_SIZE
 from ..env.observation import obs_dim_for_mode
 from ..env.rules_profile import RulesProfile
-from .checkpointing import latest_checkpoint, load_checkpoint, save_checkpoint
+from .checkpointing import (
+    latest_checkpoint,
+    load_checkpoint,
+    load_policy,
+    save_checkpoint,
+    widen_policy,
+)
 from .evaluate import evaluate_vs_bots, evaluate_vs_checkpoint
 from .models import ActorCritic
 from .ppo import PPOConfig, PPOTrainer
-from .rollout import collect_rollouts
+from .rollout import collect_rollouts, collect_rollouts_parallel
 
 _RUN_DEFAULTS = {
     "experiment_name": "ppo_baseline",
     "seed": 42,
     "iterations": 500,
     "games_per_iteration": 16,
+    "num_workers": None,
     "eval_interval": 25,
     "eval_games": 12,
     "checkpoint_interval": 25,
@@ -48,7 +56,25 @@ _RUN_DEFAULTS = {
     "belief_noise": 0.5,
     "device": "cpu",
     "trace_every": None,
+    "opponents": None,
+    "n_policy_seats": 1,
+    "eval_personalities": None,
 }
+
+
+def eval_personality_names(cfg: Dict, profile: RulesProfile) -> List[str]:
+    """Resolve the `"eval_personalities"` config key to a concrete list of
+    personality preset names to evaluate the policy against.
+
+    `None` (the default) means "all 5 presets when the rules profile has
+    trading enabled, else none" -- personality evaluation is meaningless
+    (and its bots never propose/accept) under a profile with trades off.
+    Any other value (e.g. an explicit list, or `[]`) is used as-is.
+    """
+    names = cfg.get("eval_personalities")
+    if names is None:
+        return list(PERSONALITIES.keys()) if profile.trades_enabled else []
+    return list(names)
 
 
 def _load_config(config: Union[str, Path, Dict]) -> Dict:
@@ -71,6 +97,7 @@ class SelfPlayTrainer:
         run_dir: Optional[Union[str, Path]] = None,
         device: Optional[str] = None,
         resume: bool = False,
+        init_from: Optional[Union[str, Path]] = None,
     ):
         self.cfg = _load_config(config)
         self.device = device or self.cfg["device"]
@@ -98,6 +125,30 @@ class SelfPlayTrainer:
 
         obs_dim = obs_dim_for_mode(self.cfg["obs_mode"])
         self.policy = ActorCritic(obs_dim=obs_dim, hidden_sizes=self.ppo_cfg.hidden_sizes)
+
+        if init_from is not None:
+            old_policy, _ = load_policy(init_from)
+            old_obs_dim, old_n_actions = old_policy.obs_dim, old_policy.n_actions
+            # Always route through widen_policy, even when the checkpoint is
+            # already at target dims (a no-op widen in that case): it's the
+            # single place that validates the checkpoint's hidden_sizes
+            # against the current run's config, so a mismatch is caught
+            # loudly instead of silently adopting the checkpoint's own
+            # architecture.
+            self.policy = widen_policy(
+                old_policy, obs_dim, CATALOG_SIZE,
+                new_hidden_sizes=self.ppo_cfg.hidden_sizes,
+            )
+            if old_obs_dim < obs_dim or old_n_actions < CATALOG_SIZE:
+                print(
+                    f"[init-from] widened {init_from}: "
+                    f"obs_dim {old_obs_dim} -> {obs_dim}, "
+                    f"n_actions {old_n_actions} -> {CATALOG_SIZE}"
+                )
+            else:
+                print(f"[init-from] loaded {init_from} (already at target dims, no widening)")
+
+        # Optimizer always starts fresh, whether or not init_from was used.
         self.trainer = PPOTrainer(self.policy, self.ppo_cfg, device=self.device)
         self.iteration = 0
 
@@ -119,9 +170,11 @@ class SelfPlayTrainer:
             it = self.iteration
             t0 = time.perf_counter()
 
-            batch = collect_rollouts(
+            num_workers = self.cfg.get("num_workers")
+            batch = collect_rollouts_parallel(
                 self.policy,
                 n_games=games_per_iter,
+                num_workers=num_workers,
                 rules_profile=self.profile,
                 gamma=self.ppo_cfg.gamma,
                 lam=self.ppo_cfg.gae_lambda,
@@ -133,9 +186,11 @@ class SelfPlayTrainer:
                 reward_loss=float(self.cfg["reward_loss"]),
                 belief_blend=float(self.cfg["belief_blend"]),
                 belief_noise=float(self.cfg["belief_noise"]),
-                trace_dir=self.trace_dir if self.trace_every else None,
+                trace_dir=self.trace_dir,
                 trace_every=self.trace_every,
                 trace_prefix=f"iter{it:04d}_",
+                opponents=self.cfg["opponents"],
+                n_policy_seats=int(self.cfg["n_policy_seats"]),
             )
             stats = self.trainer.update(batch)
             elapsed = time.perf_counter() - t0
@@ -168,6 +223,11 @@ class SelfPlayTrainer:
         w.add_scalar("game/truncated_games", s["truncated_games"], it)
         w.add_scalar("perf/iteration_seconds", elapsed, it)
         w.add_scalar("perf/transitions_per_iteration", len(batch), it)
+
+        if "policy_win_rate" in s:
+            w.add_scalar("game/policy_win_rate", s["policy_win_rate"], it)
+            for label, rate in s["opponent_win_rates"].items():
+                w.add_scalar(f"game/win_rate_vs_{label}", rate, it)
 
         print(
             f"[iter {it:5d}] steps={len(batch):6d} "
@@ -203,6 +263,12 @@ class SelfPlayTrainer:
             f"[eval {it:5d}] vs_random={vs_random['win_rate']:.2f} "
             f"vs_greedy={vs_greedy['win_rate']:.2f}"
         )
+
+        for name in eval_personality_names(self.cfg, self.profile):
+            bot = make_personality_bot(PERSONALITIES[name])
+            vs_personality = evaluate_vs_bots(self.policy, bot, n, **kwargs)
+            self.writer.add_scalar(f"eval/win_rate_vs_{name}", vs_personality["win_rate"], it)
+            msg += f" vs_{name}={vs_personality['win_rate']:.2f}"
 
         prev = latest_checkpoint(self.ckpt_dir)
         if prev is not None:

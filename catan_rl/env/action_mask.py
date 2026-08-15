@@ -1,10 +1,10 @@
 """
 Legal action mask generator.
 
-legal_action_mask(state) -> np.ndarray of shape (256,) dtype bool
+legal_action_mask(state) -> np.ndarray of shape (CATALOG_SIZE,) dtype bool
 
 True at index i means CATALOG[i] is legal in the current state.
-Illegal slots (including the two padding slots 254-255) remain False.
+Illegal slots (including padding slots 254-255 and 298-511) remain False.
 """
 
 from __future__ import annotations

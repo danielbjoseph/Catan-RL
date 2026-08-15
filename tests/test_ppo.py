@@ -5,12 +5,13 @@ from pathlib import Path
 import pytest
 import torch
 
+from catan_rl.env.actions import CATALOG_SIZE
 from catan_rl.rl.models import ActorCritic
 from catan_rl.rl.ppo import PPOConfig, PPOTrainer
 from catan_rl.rl.rollout import Batch
 
 OBS_DIM_SMALL = 32
-N_ACTIONS = 256
+N_ACTIONS = CATALOG_SIZE
 STAT_KEYS = {"policy_loss", "value_loss", "entropy", "approx_kl",
              "clip_fraction", "learning_rate"}
 

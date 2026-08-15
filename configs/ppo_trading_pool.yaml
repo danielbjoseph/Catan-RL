@@ -1,0 +1,69 @@
+# Opponent-pool PPO run: one seat rotates as the trained policy, the other
+# three are drawn per game from a weighted opponent pool (personality bots,
+# other checkpoints, and/or the live policy itself).
+# PPO hyperparameters (consumed by PPOConfig; unknown keys ignored there)
+lr: 3.0e-4
+clip_coef: 0.2
+epochs: 4
+minibatch_size: 256
+value_coef: 0.5
+entropy_coef: 0.01
+max_grad_norm: 0.5
+gamma: 0.999
+gae_lambda: 0.95
+hidden_sizes: [512, 512]
+target_kl: null
+
+# Run settings (consumed by SelfPlayTrainer)
+experiment_name: ppo_trading_pool
+seed: 42
+iterations: 500
+games_per_iteration: 16
+eval_interval: 25          # iterations between eval passes
+eval_games: 12             # games per opponent during eval
+checkpoint_interval: 25    # iterations between checkpoints
+rules_profile: standard_trading
+max_turns: 500
+reward_win: 1.0
+reward_loss: -1.0
+
+# Observation mode (consumed by SelfPlayTrainer -> CatanAECEnv/evaluate/checkpointing):
+#   self_play (1548 floats) - exact self info, public opponent info only
+#   perfect   (1593 floats) - exact info for all players (Mode A / oracle)
+#   realistic (1577 floats) - self_play base + noised opponent-hand beliefs,
+#                             believed dev-deck composition and bank; requires
+#                             a table-view BeliefTracker (env owns it automatically)
+#   global    (1604 floats) - perfect base + exact remaining dev-deck composition and bank
+obs_mode: self_play
+
+# realistic mode only: how strongly the believed opponent-hand vector is
+# blended toward a uniform prior (0 = pure tracker estimate, 1 = uniform)
+belief_blend: 0.25
+# realistic mode only: stddev scale of Gaussian noise applied on top of the
+# blended belief vector (0 = no noise)
+belief_noise: 0.5
+
+device: cpu
+
+# Opponent pool (consumed by collect_rollouts via SelfPlayTrainer). Per game
+# g, policy seats are {(g + k) % 4 for k in range(n_policy_seats)}; every
+# other seat draws independently (weighted) from this pool, seeded off the
+# game seed. "self" seats use the live policy stochastically but their
+# transitions are discarded -- only policy-seat transitions train the model.
+n_policy_seats: 1
+opponents:
+  pool:
+    - type: personality
+      name: opportunist
+      weight: 2
+    - type: personality
+      name: stall_the_leader
+      weight: 1
+    - type: self
+      weight: 2
+    # A checkpoint entry looks like the following (path is environment-
+    # specific -- e.g. a prior run's saved checkpoint -- so no example
+    # checkpoint entry ships in this config by default):
+    # - type: checkpoint
+    #   path: runs/<experiment_name>/checkpoints/ckpt_000100.pt
+    #   weight: 1

@@ -1,0 +1,388 @@
+"""Tests for parallel rollout worker module."""
+
+import torch
+import pytest
+
+from catan_rl.env.observation import OBS_DIM
+from catan_rl.env.rules_profile import RulesProfile
+from catan_rl.rl.models import ActorCritic
+from catan_rl.rl.rollout import Batch
+from catan_rl.rl.parallel_rollout import _worker_collect_games, ParallelRolloutConfig
+
+
+FAST_PROFILE = RulesProfile(name="fast", dev_cards_enabled=False, win_vp=8)
+
+
+class TestWorkerCollectGames:
+    def test_worker_collect_games_returns_batch(self):
+        """Verify worker returns valid Batch with expected structure."""
+        torch.manual_seed(0)
+        policy = ActorCritic(hidden_sizes=(64, 64))
+
+        batch = _worker_collect_games(
+            worker_id=0,
+            n_games=1,
+            policy=policy,
+            rules_profile=FAST_PROFILE,
+            gamma=0.999,
+            lam=0.95,
+            max_turns=500,
+            seed_base=123,
+            device="cpu",
+            obs_mode="self_play",
+            reward_win=1.0,
+            reward_loss=-1.0,
+            belief_blend=0.25,
+            belief_noise=0.5,
+            trace_dir=None,
+            trace_every=None,
+            trace_prefix="",
+            opponents=None,
+            n_policy_seats=1,
+        )
+
+        # Verify it's a Batch
+        assert isinstance(batch, Batch)
+
+        # Verify it has data
+        assert len(batch) > 0
+
+        # Verify tensor shapes are consistent
+        n = batch.obs.shape[0]
+        assert batch.obs.shape == (n, OBS_DIM)
+        assert batch.actions.shape == (n,)
+        assert batch.logprobs.shape == (n,)
+        assert batch.values.shape == (n,)
+        assert batch.advantages.shape == (n,)
+        assert batch.returns.shape == (n,)
+        assert batch.seat_ids.shape == (n,)
+        assert batch.episode_ids.shape == (n,)
+
+        # Verify stats
+        assert batch.stats is not None
+        assert batch.stats["games_completed"] == 1
+
+    def test_worker_collect_games_deterministic_with_same_seed(self):
+        """Worker should produce same batch with same seed across runs."""
+        policy = ActorCritic(obs_dim=OBS_DIM, hidden_sizes=(512, 512))
+        profile = RulesProfile.get("simplified_v1")
+
+        batch1 = _worker_collect_games(
+            worker_id=0,
+            n_games=2,
+            policy=policy,
+            rules_profile=profile,
+            gamma=0.99,
+            lam=0.95,
+            max_turns=500,
+            seed_base=42,
+            device="cpu",
+            obs_mode="self_play",
+            reward_win=1.0,
+            reward_loss=-1.0,
+            belief_blend=0.25,
+            belief_noise=0.5,
+            trace_dir=None,
+            trace_every=None,
+            trace_prefix="",
+            opponents=None,
+            n_policy_seats=1,
+        )
+
+        batch2 = _worker_collect_games(
+            worker_id=0,
+            n_games=2,
+            policy=policy,
+            rules_profile=profile,
+            gamma=0.99,
+            lam=0.95,
+            max_turns=500,
+            seed_base=42,
+            device="cpu",
+            obs_mode="self_play",
+            reward_win=1.0,
+            reward_loss=-1.0,
+            belief_blend=0.25,
+            belief_noise=0.5,
+            trace_dir=None,
+            trace_every=None,
+            trace_prefix="",
+            opponents=None,
+            n_policy_seats=1,
+        )
+
+        # Identical seeds should produce identical batches
+        assert len(batch1) == len(batch2)
+        assert torch.equal(batch1.obs, batch2.obs), "Observations differ"
+        assert torch.equal(batch1.actions, batch2.actions), "Actions differ"
+        assert torch.allclose(batch1.advantages, batch2.advantages), "Advantages differ"
+
+
+class TestParallelRolloutConfig:
+    def test_config_defaults(self):
+        """Verify ParallelRolloutConfig has correct defaults."""
+        config = ParallelRolloutConfig()
+        assert config.num_workers is None
+        assert config.fallback_to_sequential is True
+
+    def test_config_custom_values(self):
+        """Verify ParallelRolloutConfig can be initialized with custom values."""
+        config = ParallelRolloutConfig(num_workers=4, fallback_to_sequential=False)
+        assert config.num_workers == 4
+        assert config.fallback_to_sequential is False
+
+
+class TestAggregateBatches:
+    def test_aggregate_batches_concatenates_tensors(self):
+        """Verify _aggregate_batches concatenates tensors along dim=0."""
+        from catan_rl.rl.rollout import _aggregate_batches
+
+        # Create two simple batches
+        batch1 = Batch(
+            obs=torch.randn(10, OBS_DIM),
+            masks=torch.ones(10, 121, dtype=torch.bool),
+            actions=torch.randint(0, 121, (10,)),
+            logprobs=torch.randn(10),
+            values=torch.randn(10),
+            advantages=torch.randn(10),
+            returns=torch.randn(10),
+            seat_ids=torch.zeros(10, dtype=torch.long),
+            episode_ids=torch.zeros(10, dtype=torch.long),
+            stats={"games_completed": 2},
+        )
+        batch2 = Batch(
+            obs=torch.randn(5, OBS_DIM),
+            masks=torch.ones(5, 121, dtype=torch.bool),
+            actions=torch.randint(0, 121, (5,)),
+            logprobs=torch.randn(5),
+            values=torch.randn(5),
+            advantages=torch.randn(5),
+            returns=torch.randn(5),
+            seat_ids=torch.ones(5, dtype=torch.long),
+            episode_ids=torch.ones(5, dtype=torch.long),
+            stats={"games_completed": 1},
+        )
+
+        # Aggregate
+        aggregated = _aggregate_batches([batch1, batch2])
+
+        # Verify shapes are concatenated
+        assert aggregated.obs.shape == (15, OBS_DIM)
+        assert aggregated.actions.shape == (15,)
+        assert aggregated.logprobs.shape == (15,)
+        assert aggregated.values.shape == (15,)
+        assert aggregated.advantages.shape == (15,)
+        assert aggregated.returns.shape == (15,)
+        assert aggregated.seat_ids.shape == (15,)
+        assert aggregated.episode_ids.shape == (15,)
+        assert len(aggregated) == 15
+
+    def test_aggregate_batches_offsets_episode_ids(self):
+        """Episode IDs should be offset to be globally unique across workers."""
+        from catan_rl.rl.rollout import _aggregate_batches
+
+        batch1 = Batch(
+            obs=torch.randn(100, 100),
+            masks=torch.ones(100, 512, dtype=torch.bool),
+            actions=torch.randint(0, 512, (100,)),
+            logprobs=torch.randn(100),
+            values=torch.randn(100),
+            advantages=torch.randn(100),
+            returns=torch.randn(100),
+            seat_ids=torch.zeros(100, dtype=torch.long),
+            episode_ids=torch.tensor([0, 1, 2, 3] * 25, dtype=torch.long),
+            stats={"num_games": 4},
+        )
+
+        batch2 = Batch(
+            obs=torch.randn(120, 100),
+            masks=torch.ones(120, 512, dtype=torch.bool),
+            actions=torch.randint(0, 512, (120,)),
+            logprobs=torch.randn(120),
+            values=torch.randn(120),
+            advantages=torch.randn(120),
+            returns=torch.randn(120),
+            seat_ids=torch.zeros(120, dtype=torch.long),
+            episode_ids=torch.tensor([0, 1, 2, 3, 4] * 24, dtype=torch.long),
+            stats={"num_games": 5},
+        )
+
+        aggregated = _aggregate_batches([batch1, batch2])
+
+        unique_ids = torch.unique(aggregated.episode_ids)
+        assert len(unique_ids) == 9, f"Expected 9 unique episodes, got {len(unique_ids)}"
+
+        batch2_ids = aggregated.episode_ids[100:]
+        assert batch2_ids.min() >= 4, f"Batch2 min ID should be >= 4, got {batch2_ids.min()}"
+
+
+class TestAggregateStats:
+    def test_aggregate_stats_sums_numeric_values(self):
+        """Verify _aggregate_stats correctly handles count and mean fields."""
+        from catan_rl.rl.rollout import _aggregate_stats
+
+        stats_list = [
+            {
+                "games_completed": 10,
+                "truncated_games": 2,
+                "mean_episode_length": 100.0,
+            },
+            {
+                "games_completed": 20,
+                "truncated_games": 4,
+                "mean_episode_length": 110.0,
+            },
+        ]
+
+        aggregated = _aggregate_stats(stats_list)
+
+        # Count fields should be summed
+        assert aggregated["games_completed"] == 30
+        assert aggregated["truncated_games"] == 6
+        # Mean fields should be weighted-averaged: (100*10 + 110*20) / 30 = 106.67
+        assert abs(aggregated["mean_episode_length"] - 106.67) < 0.01
+
+    def test_aggregate_stats_correct_merge_logic(self):
+        """Stats should be merged correctly per key type."""
+        stats_list = [
+            {
+                "num_games": 2,
+                "mean_episode_length": 100.0,
+                "total_turns": 400,
+                "win_counts": [1, 0, 1, 0, 0, 0, 0, 0],
+                "opponent_win_rates": {"bot:random": 0.4},
+            },
+            {
+                "num_games": 2,
+                "mean_episode_length": 120.0,
+                "total_turns": 480,
+                "win_counts": [0, 1, 0, 1, 0, 0, 0, 0],
+                "opponent_win_rates": {"bot:random": 0.6},
+            },
+        ]
+
+        from catan_rl.rl.rollout import _aggregate_stats
+        merged = _aggregate_stats(stats_list)
+
+        # Counts should sum
+        assert merged["num_games"] == 4
+        assert merged["total_turns"] == 880
+
+        # Means should be weighted-averaged: (100*2 + 120*2) / 4 = 110
+        expected_mean_len = 110.0
+        assert abs(merged["mean_episode_length"] - expected_mean_len) < 0.01
+
+        # Win counts should sum element-wise
+        expected_counts = [1, 1, 1, 1, 0, 0, 0, 0]
+        assert merged["win_counts"] == expected_counts
+
+        # Opponent rates should be weighted-averaged: (0.4*2 + 0.6*2) / 4 = 0.5
+        assert abs(merged["opponent_win_rates"]["bot:random"] - 0.5) < 0.01
+
+
+class TestCollectRolloutsParallel:
+    def test_collect_rollouts_parallel_fallback_to_sequential_when_workers_one(self):
+        """Verify parallel collection falls back to sequential when num_workers <= 1."""
+        from catan_rl.rl.rollout import collect_rollouts_parallel
+
+        torch.manual_seed(0)
+        policy = ActorCritic(hidden_sizes=(64, 64))
+
+        batch = collect_rollouts_parallel(
+            policy=policy,
+            n_games=1,
+            num_workers=1,
+            rules_profile=FAST_PROFILE,
+            gamma=0.999,
+            lam=0.95,
+            max_turns=500,
+            seed=123,
+        )
+
+        assert isinstance(batch, Batch)
+        assert len(batch) > 0
+        assert batch.stats["games_completed"] == 1
+
+    def test_collect_rollouts_parallel_with_explicit_workers(self):
+        """Verify parallel collection with explicit num_workers."""
+        from catan_rl.rl.rollout import collect_rollouts_parallel
+
+        torch.manual_seed(0)
+        policy = ActorCritic(hidden_sizes=(64, 64))
+
+        batch = collect_rollouts_parallel(
+            policy=policy,
+            n_games=2,
+            num_workers=2,
+            rules_profile=FAST_PROFILE,
+            gamma=0.999,
+            lam=0.95,
+            max_turns=500,
+            seed=123,
+        )
+
+        assert isinstance(batch, Batch)
+        assert len(batch) > 0
+        assert batch.stats["games_completed"] == 2
+
+    def test_collect_rollouts_parallel_caps_num_workers(self):
+        """Should cap num_workers at n_games internally and emit warning."""
+        import warnings
+        from catan_rl.rl.rollout import collect_rollouts_parallel
+
+        torch.manual_seed(0)
+        policy = ActorCritic(hidden_sizes=(64, 64))
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            batch = collect_rollouts_parallel(
+                policy=policy,
+                n_games=4,
+                num_workers=100,
+                rules_profile=FAST_PROFILE,
+                gamma=0.999,
+                lam=0.95,
+                max_turns=500,
+                seed=42,
+            )
+            assert len(batch) > 0, "Should complete successfully with capped num_workers"
+            assert batch.stats["games_completed"] == 4
+            # Check that warning was issued about capping
+            assert len(w) == 1, f"Expected 1 warning, got {len(w)}"
+            assert "Capping to" in str(w[0].message)
+
+
+class TestSelfPlayTrainerParallel:
+    def test_self_play_trainer_accepts_num_workers_config(self, tmp_path):
+        """Verify SelfPlayTrainer accepts num_workers in config."""
+        from catan_rl.rl.self_play import SelfPlayTrainer
+
+        # Create a minimal config with num_workers
+        config = {
+            "experiment_name": "test_parallel",
+            "seed": 42,
+            "iterations": 1,
+            "games_per_iteration": 2,
+            "num_workers": 2,
+            "rules_profile": "simplified_v1",
+            "max_turns": 500,
+            "reward_win": 1.0,
+            "reward_loss": -1.0,
+            "obs_mode": "self_play",
+            "belief_blend": 0.25,
+            "belief_noise": 0.5,
+            "device": "cpu",
+            "trace_every": None,
+            "opponents": None,
+            "n_policy_seats": 1,
+            "eval_personalities": None,
+            "eval_interval": 25,
+            "eval_games": 12,
+            "checkpoint_interval": 25,
+        }
+
+        # Initialize trainer with config containing num_workers
+        trainer = SelfPlayTrainer(config, run_dir=tmp_path)
+
+        # Verify num_workers is stored in config
+        assert trainer.cfg.get("num_workers") == 2

@@ -16,7 +16,7 @@ Rewards:
   +1 to the winner, -1 to all others, emitted at game end.
   0 at every intermediate step.
 
-Infos always contain "action_mask": np.ndarray of shape (256,) bool.
+Infos always contain "action_mask": np.ndarray of shape (CATALOG_SIZE,) bool.
 """
 
 from __future__ import annotations

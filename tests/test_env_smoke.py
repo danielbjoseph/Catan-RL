@@ -171,6 +171,18 @@ class TestAECSmoke:
                 agent = env.agent_selection
                 env.step(_random_action(env.observe(agent)))
 
+    def test_trading_profile_full_game_no_crash(self):
+        env = CatanAECEnv(rules_profile="standard_trading")
+        env.reset(seed=6)
+        steps = 0
+        while not all(env.terminations.values()) and not all(env.truncations.values()):
+            agent = env.agent_selection
+            obs_dict = env.observe(agent)
+            assert not np.any(np.isnan(obs_dict["observation"]))
+            env.step(_random_action(obs_dict))
+            steps += 1
+        assert steps > 0
+
 
 # ---------------------------------------------------------------------------
 # Gym wrapper smoke tests
