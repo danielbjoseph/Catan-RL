@@ -214,42 +214,26 @@ function buildBoard() {
     }
   }
 
+  // Calculate board center once
+  const boardCenterX = geo.hex_centers.reduce((sum, c) => sum + c[0], 0) / geo.hex_centers.length;
+  const boardCenterY = geo.hex_centers.reduce((sum, c) => sum + c[1], 0) / geo.hex_centers.length;
+
   (board.ports || []).forEach((port) => {
     const [va, vb] = port.vertices;
     const pa = vp[va], pb = vp[vb];
 
-    // Port edge midpoint (on the actual edge between vertices)
-    const mx = (pa[0] + pb[0]) / 2, my = (pa[1] + pb[1]) / 2;
+    // Port edge midpoint
+    const mx = (pa[0] + pb[0]) / 2;
+    const my = (pa[1] + pb[1]) / 2;
 
-    // Calculate edge vector
-    const ex = pb[0] - pa[0];
-    const ey = pb[1] - pa[1];
+    // Direction from board center to edge midpoint
+    const dx = mx - boardCenterX;
+    const dy = my - boardCenterY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
 
-    // Normal perpendicular to edge (90 degree rotation)
-    let nx = -ey;
-    let ny = ex;
-
-    // Normalize the normal vector
-    const nlen = Math.sqrt(nx * nx + ny * ny);
-    nx /= nlen;
-    ny /= nlen;
-
-    // Find board center to determine outward direction
-    const centerX = geo.hex_centers.reduce((sum, c) => sum + c[0], 0) / geo.hex_centers.length;
-    const centerY = geo.hex_centers.reduce((sum, c) => sum + c[1], 0) / geo.hex_centers.length;
-
-    // Check if normal points away from center; flip if needed
-    const toEdge_x = mx - centerX;
-    const toEdge_y = my - centerY;
-    if (nx * toEdge_x + ny * toEdge_y < 0) {
-      nx = -nx;
-      ny = -ny;
-    }
-
-    // Place port label OFF the board (smaller offset to keep in view)
-    const offset = 0.4;
-    const px = mx + nx * offset;
-    const py = my + ny * offset;
+    // Normalize and apply small offset
+    const px = mx + (dx / dist) * 0.3;
+    const py = my + (dy / dist) * 0.3;
 
     // Draw dashed line from vertex va to port label (neutral color for all)
     const line1 = svgEl("line", {
