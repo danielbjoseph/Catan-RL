@@ -467,48 +467,51 @@ html, body {
 .settlement-rect { stroke: #10131a; stroke-width: 0.02; }
 .city-shape { stroke: #10131a; stroke-width: 0.02; }
 
-.port-edge {
+.port-connector {
   fill: none;
-  stroke-width: 0.12;
+  stroke-width: 0.06;
+  stroke-dasharray: 0.15,0.1;
   stroke-linecap: round;
 }
 
-.port-edge.generic {
+.port-connector.generic {
   stroke: #999;
+  opacity: 0.6;
 }
 
-.port-edge.wheat {
+.port-connector.wheat {
   stroke: var(--wheat);
+  opacity: 0.7;
 }
 
-.port-edge.sheep {
+.port-connector.sheep {
   stroke: var(--sheep);
+  opacity: 0.7;
 }
 
-.port-edge.brick {
+.port-connector.brick {
   stroke: var(--brick);
+  opacity: 0.7;
 }
 
-.port-edge.ore {
+.port-connector.ore {
   stroke: var(--ore);
+  opacity: 0.7;
 }
 
-.port-edge.wood {
+.port-connector.wood {
   stroke: var(--wood);
-}
-
-.vertex-claim-point {
-  fill: #ddd;
-  stroke: #999;
-  stroke-width: 0.015;
+  opacity: 0.7;
 }
 
 .port-label {
-  font-size: 0.16px;
+  font-size: 0.14px;
   font-weight: bold;
   text-anchor: middle;
   dominant-baseline: central;
   fill: #cfd6e0;
+  background: rgba(20, 23, 28, 0.9);
+  padding: 0.08px;
 }
 
 @media (max-width: 900px) {

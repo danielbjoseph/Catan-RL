@@ -301,6 +301,15 @@ class BoardConfig:
                 tokens[hi] = token_list[ti]
                 ti += 1
 
+        # Ensure 6s and 8s never touch (Catan rules)
+        while cls._has_adjacent_hot_tokens(geo, tokens):
+            rng.shuffle(token_list)
+            ti = 0
+            for hi, res in enumerate(resources):
+                if res != HexType.DESERT:
+                    tokens[hi] = token_list[ti]
+                    ti += 1
+
         ports = cls._build_ports(geo)
         return cls(
             geometry=geo,
@@ -309,6 +318,18 @@ class BoardConfig:
             ports=tuple(ports),
             desert_hex=desert_hex,
         )
+
+    @classmethod
+    def _has_adjacent_hot_tokens(cls, geo: BoardGeometry, tokens: List[int]) -> bool:
+        """Check if any 6 or 8 tokens are adjacent to each other."""
+        for hex_id in range(len(tokens)):
+            token = tokens[hex_id]
+            if token in (6, 8):
+                neighbors = geo.hex_neighbors(hex_id)
+                for neighbor_id in neighbors:
+                    if tokens[neighbor_id] in (6, 8):
+                        return True
+        return False
 
     @classmethod
     def _build_ports(cls, geo: BoardGeometry) -> List[Port]:

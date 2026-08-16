@@ -218,35 +218,47 @@ function buildBoard() {
     const [va, vb] = port.vertices;
     const pa = vp[va], pb = vp[vb];
 
-    // Port edge midpoint (on the actual edge between vertices)
-    const mx = (pa[0] + pb[0]) / 2, my = (pa[1] + pb[1]) / 2;
-
     // Determine port type for styling
     const portClass = port.resource === null || port.resource === undefined
       ? "generic"
       : RESOURCE_NAMES[port.resource];
 
-    // Draw thick line ON the edge (replaces old line + offset marker approach)
-    const edgeLine = svgEl("line", {
+    // Port edge midpoint (on the actual edge between vertices)
+    const mx = (pa[0] + pb[0]) / 2, my = (pa[1] + pb[1]) / 2;
+
+    // Find board center (average of all hex centers)
+    const centerX = geo.hex_centers.reduce((sum, c) => sum + c[0], 0) / geo.hex_centers.length;
+    const centerY = geo.hex_centers.reduce((sum, c) => sum + c[1], 0) / geo.hex_centers.length;
+
+    // Vector from center to edge midpoint
+    const dx = mx - centerX;
+    const dy = my - centerY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    // Place port label OFF the board (outward from center)
+    const offsetDist = dist + 1.2;
+    const px = centerX + (dx / dist) * offsetDist;
+    const py = centerY + (dy / dist) * offsetDist;
+
+    // Draw dashed line from vertex va to port label
+    const line1 = svgEl("line", {
       x1: tx(pa[0]), y1: ty(pa[1]),
-      x2: tx(pb[0]), y2: ty(pb[1]),
-      class: `port-edge ${portClass}`,
+      x2: tx(px), y2: ty(py),
+      class: `port-connector ${portClass}`,
     });
-    staticLayer.appendChild(edgeLine);
+    staticLayer.appendChild(line1);
 
-    // Draw small circles at each vertex to show settlement claim points
-    [pa, pb].forEach((vertex) => {
-      const claimDot = svgEl("circle", {
-        cx: tx(vertex[0]), cy: ty(vertex[1]),
-        r: 0.12,
-        class: "vertex-claim-point",
-      });
-      staticLayer.appendChild(claimDot);
+    // Draw dashed line from vertex vb to port label
+    const line2 = svgEl("line", {
+      x1: tx(pb[0]), y1: ty(pb[1]),
+      x2: tx(px), y2: ty(py),
+      class: `port-connector ${portClass}`,
     });
+    staticLayer.appendChild(line2);
 
-    // Draw port label at edge midpoint
+    // Draw port label off the board
     const text = svgEl("text", {
-      x: tx(mx), y: ty(my),
+      x: tx(px), y: ty(py),
       class: "port-label",
     });
     text.textContent = port.resource === null || port.resource === undefined
