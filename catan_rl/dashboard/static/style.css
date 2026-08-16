@@ -469,39 +469,11 @@ html, body {
 
 .port-connector {
   fill: none;
+  stroke: #6b7280;
   stroke-width: 0.06;
   stroke-dasharray: 0.15,0.1;
   stroke-linecap: round;
-}
-
-.port-connector.generic {
-  stroke: #999;
-  opacity: 0.6;
-}
-
-.port-connector.wheat {
-  stroke: var(--wheat);
-  opacity: 0.7;
-}
-
-.port-connector.sheep {
-  stroke: var(--sheep);
-  opacity: 0.7;
-}
-
-.port-connector.brick {
-  stroke: var(--brick);
-  opacity: 0.7;
-}
-
-.port-connector.ore {
-  stroke: var(--ore);
-  opacity: 0.7;
-}
-
-.port-connector.wood {
-  stroke: var(--wood);
-  opacity: 0.7;
+  opacity: 0.65;
 }
 
 .port-label {

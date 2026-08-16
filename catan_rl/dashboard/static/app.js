@@ -218,41 +218,52 @@ function buildBoard() {
     const [va, vb] = port.vertices;
     const pa = vp[va], pb = vp[vb];
 
-    // Determine port type for styling
-    const portClass = port.resource === null || port.resource === undefined
-      ? "generic"
-      : RESOURCE_NAMES[port.resource];
-
     // Port edge midpoint (on the actual edge between vertices)
     const mx = (pa[0] + pb[0]) / 2, my = (pa[1] + pb[1]) / 2;
 
-    // Find board center (average of all hex centers)
+    // Calculate edge vector
+    const ex = pb[0] - pa[0];
+    const ey = pb[1] - pa[1];
+
+    // Normal perpendicular to edge (90 degree rotation)
+    let nx = -ey;
+    let ny = ex;
+
+    // Normalize the normal vector
+    const nlen = Math.sqrt(nx * nx + ny * ny);
+    nx /= nlen;
+    ny /= nlen;
+
+    // Find board center to determine outward direction
     const centerX = geo.hex_centers.reduce((sum, c) => sum + c[0], 0) / geo.hex_centers.length;
     const centerY = geo.hex_centers.reduce((sum, c) => sum + c[1], 0) / geo.hex_centers.length;
 
-    // Vector from center to edge midpoint
-    const dx = mx - centerX;
-    const dy = my - centerY;
-    const dist = Math.sqrt(dx * dx + dy * dy);
+    // Check if normal points away from center; flip if needed
+    const toEdge_x = mx - centerX;
+    const toEdge_y = my - centerY;
+    if (nx * toEdge_x + ny * toEdge_y < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
 
-    // Place port label OFF the board (outward from center)
-    const offsetDist = dist + 1.2;
-    const px = centerX + (dx / dist) * offsetDist;
-    const py = centerY + (dy / dist) * offsetDist;
+    // Place port label OFF the board
+    const offset = 1.2;
+    const px = mx + nx * offset;
+    const py = my + ny * offset;
 
-    // Draw dashed line from vertex va to port label
+    // Draw dashed line from vertex va to port label (neutral color for all)
     const line1 = svgEl("line", {
       x1: tx(pa[0]), y1: ty(pa[1]),
       x2: tx(px), y2: ty(py),
-      class: `port-connector ${portClass}`,
+      class: "port-connector",
     });
     staticLayer.appendChild(line1);
 
-    // Draw dashed line from vertex vb to port label
+    // Draw dashed line from vertex vb to port label (neutral color for all)
     const line2 = svgEl("line", {
       x1: tx(pb[0]), y1: ty(pb[1]),
       x2: tx(px), y2: ty(py),
-      class: `port-connector ${portClass}`,
+      class: "port-connector",
     });
     staticLayer.appendChild(line2);
 
