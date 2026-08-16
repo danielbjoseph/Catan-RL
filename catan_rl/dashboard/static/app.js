@@ -176,7 +176,9 @@ function buildBoard() {
   const vp = geo.vertex_positions;
   const xs = vp.map((p) => tx(p[0]));
   const ys = vp.map((p) => ty(p[1]));
-  const margin = 1.1;
+
+  // Add extra margin for ports that will be drawn off-board
+  const margin = 2.0;
   const minX = Math.min(...xs) - margin;
   const minY = Math.min(...ys) - margin;
   const w = Math.max(...xs) - Math.min(...xs) + margin * 2;
@@ -246,8 +248,8 @@ function buildBoard() {
       ny = -ny;
     }
 
-    // Place port label OFF the board
-    const offset = 1.2;
+    // Place port label OFF the board (smaller offset to keep in view)
+    const offset = 0.4;
     const px = mx + nx * offset;
     const py = my + ny * offset;
 
