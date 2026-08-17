@@ -65,7 +65,7 @@ def _setup_settlement_actions(state: "GameState") -> List[Action]:
     occupied = state.all_occupied_vertices()
     geo = state.config.geometry
     actions = []
-    for v in range(geo.n_vertices):
+    for v in range(54):  # Only playable vertices (0-53)
         if v in occupied:
             continue
         # Distance rule: no neighbor may be occupied
