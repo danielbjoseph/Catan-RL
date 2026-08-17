@@ -312,26 +312,6 @@ function buildBoard() {
     staticLayer.appendChild(text);
   });
 
-  // Debug: Draw vertex IDs at each position
-  const debugLayer = svgEl("g", { id: "debug-layer" });
-  vp.forEach((pos, vid) => {
-    const text = svgEl("text", {
-      x: tx(pos[0]), y: ty(pos[1]),
-      class: "debug-vertex-id",
-    });
-    text.textContent = String(vid);
-    debugLayer.appendChild(text);
-
-    // Draw small circle at vertex
-    const circle = svgEl("circle", {
-      cx: tx(pos[0]), cy: ty(pos[1]),
-      r: 0.05,
-      class: "debug-vertex-marker",
-    });
-    debugLayer.appendChild(circle);
-  });
-  staticLayer.appendChild(debugLayer);
-
   const dynLayer = svgEl("g", { id: "dynamic-layer" });
   svg.appendChild(dynLayer);
 }
