@@ -142,6 +142,18 @@ function initReplay(data) {
   const nPlayers = (plies[0] && plies[0].state.players.length) || 4;
   seatNames = meta.seats || Array.from({ length: nPlayers }, (_, i) => `Player ${i}`);
 
+  // Debug: Log port information
+  console.log("=== PORT DEBUG INFO ===");
+  console.log(`Total vertices: ${geo.vertex_positions.length}`);
+  console.log(`Total ports: ${board.ports.length}`);
+  board.ports.forEach((port, idx) => {
+    const [va, vb] = port.vertices;
+    const pa = geo.vertex_positions[va];
+    const pb = geo.vertex_positions[vb];
+    const resource = port.resource === null ? "3:1" : ["wood", "brick", "sheep", "wheat", "ore"][port.resource];
+    console.log(`Port ${idx} (${resource}): vertices [${va}, ${vb}] at positions [${pa}] and [${pb}]`);
+  });
+
   computeRollEvents();
   buildBoard();
   buildLog();
@@ -270,6 +282,26 @@ function buildBoard() {
 
     staticLayer.appendChild(text);
   });
+
+  // Debug: Draw vertex IDs at each position
+  const debugLayer = svgEl("g", { id: "debug-layer" });
+  vp.forEach((pos, vid) => {
+    const text = svgEl("text", {
+      x: tx(pos[0]), y: ty(pos[1]),
+      class: "debug-vertex-id",
+    });
+    text.textContent = String(vid);
+    debugLayer.appendChild(text);
+
+    // Draw small circle at vertex
+    const circle = svgEl("circle", {
+      cx: tx(pos[0]), cy: ty(pos[1]),
+      r: 0.05,
+      class: "debug-vertex-marker",
+    });
+    debugLayer.appendChild(circle);
+  });
+  staticLayer.appendChild(debugLayer);
 
   const dynLayer = svgEl("g", { id: "dynamic-layer" });
   svg.appendChild(dynLayer);
