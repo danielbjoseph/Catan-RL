@@ -90,6 +90,8 @@ def _build_settlement(state: "GameState", vertex_id: int):
     elif state.phase == Phase.SETUP_SETTLEMENT_2:
         # Give initial resources for second settlement
         for hex_id in geo.vertex_to_hexes[vertex_id]:
+            if hex_id >= 19:  # Skip water hexes (IDs 19+)
+                continue
             hex_type = state.config.hex_resources[hex_id]
             if hex_type != HexType.DESERT:
                 res = hex_type.to_resource()
