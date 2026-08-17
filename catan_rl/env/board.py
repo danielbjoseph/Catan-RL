@@ -55,6 +55,26 @@ _DIRECTIONS: List[Tuple[int, int]] = [
     (1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1),
 ]
 
+# Water hexes (ring 3) surrounding the playable board for proper port positioning
+def _generate_ring_3() -> List[Tuple[int, int]]:
+    """Generate all hexes in ring 3 (outer water ring)."""
+    ring = []
+    # Start at direction E (1, 0) and spiral outward
+    q, r = 3, 0
+    for direction_idx in range(6):
+        for step in range(3):
+            ring.append((q, r))
+            # Move to next hex in this direction
+            dq, dr = _DIRECTIONS[(direction_idx + 2) % 6]
+            q += dq
+            r += dr
+    return ring
+
+_WATER_HEX_COORDS: List[Tuple[int, int]] = _generate_ring_3()
+
+# All hex coordinates including water ring
+_ALL_HEX_COORDS: List[Tuple[int, int]] = _HEX_COORDS + _WATER_HEX_COORDS
+
 # Standard hex type distribution (19 hexes)
 _STANDARD_RESOURCES: List[HexType] = (
     [HexType.DESERT]
@@ -139,14 +159,17 @@ class BoardGeometry:
 
     @classmethod
     def build(cls) -> BoardGeometry:
+        # Use playable hexes only for the main board
         coords = _HEX_COORDS
+        # But include water hexes when collecting vertices (for port positioning)
+        all_coords_for_vertices = _ALL_HEX_COORDS
         coord_set = set(coords)
         coord_to_hex = {c: i for i, c in enumerate(coords)}
 
-        # Collect all vertex positions keyed by rounded (x, y)
+        # Collect all vertex positions (including from water hexes) keyed by rounded (x, y)
         pos_to_vid: dict = {}
         hex_raw_vertices: List[List[Tuple[float, float]]] = []
-        for q, r in coords:
+        for q, r in all_coords_for_vertices:
             verts = _hex_vertex_positions(q, r)
             hex_raw_vertices.append(verts)
             for p in verts:
@@ -160,18 +183,25 @@ class BoardGeometry:
             pos_to_vid[pos] = vid
         n_vertices = len(sorted_positions)
 
-        # Build hex_to_vertices, tracking a higher-precision raw position per
-        # vertex id (the dedup keys above are rounded to 5 decimals, which is
-        # too coarse for drawing geometry consumers that need hex-center
-        # precision; the 6-decimal raw positions agree across sharing hexes).
+        # Build hex_to_vertices for playable hexes only, tracking higher-precision positions
+        # (the dedup keys are rounded to 5 decimals; 6-decimal raw positions are precise)
         hex_to_vertices: Dict[int, List[int]] = {}
         raw_pos_by_vid: Dict[int, Tuple[float, float]] = {}
+        # Map playable coords to indices in the full coords list
+        coord_to_full_idx = {c: i for i, c in enumerate(all_coords_for_vertices)}
+
+        # Populate raw_pos_by_vid for ALL vertices (including water hexes)
+        for hi, verts in enumerate(hex_raw_vertices):
+            for p in verts:
+                vid = pos_to_vid[_round_pos(p)]
+                raw_pos_by_vid.setdefault(vid, p)
+
+        # Build hex_to_vertices mapping for playable hexes only
         for hi, (q, r) in enumerate(coords):
-            verts = hex_raw_vertices[hi]
+            full_idx = coord_to_full_idx[(q, r)]
+            verts = hex_raw_vertices[full_idx]
             vids = [pos_to_vid[_round_pos(p)] for p in verts]
             hex_to_vertices[hi] = vids
-            for vid, p in zip(vids, verts):
-                raw_pos_by_vid.setdefault(vid, p)
 
         # Build edges: each edge is a frozenset of two adjacent vertices on same hex
         edge_set: Dict[FrozenSet[int], int] = {}
