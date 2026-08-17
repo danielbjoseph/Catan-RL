@@ -350,7 +350,7 @@ class BoardConfig:
                     tokens[hi] = token_list[ti]
                     ti += 1
 
-        ports = cls._build_ports(geo)
+        ports = cls._build_ports(geo, rng)
         return cls(
             geometry=geo,
             hex_resources=tuple(resources),
@@ -372,16 +372,45 @@ class BoardConfig:
         return False
 
     @classmethod
-    def _build_ports(cls, geo: BoardGeometry) -> List[Port]:
-        ports: List[Port] = []
-        coord_to_hex = geo.coord_to_hex
-        for q, r, vi, vj, resource in _PORT_DEFS:
-            if (q, r) not in coord_to_hex:
-                continue
-            hi = coord_to_hex[(q, r)]
-            vids = geo.hex_to_vertices[hi]
-            va, vb = vids[vi % 6], vids[vj % 6]
-            ports.append(Port(vertices=(va, vb), resource=resource))
+    def _build_ports(cls, geo: BoardGeometry, rng: Optional[random.Random] = None) -> List[Port]:
+        """Compute ports dynamically from boundary edges (edges between playable and water hexes)."""
+        if rng is None:
+            rng = random.Random()
+
+        # Find all boundary edges (connecting playable and water hexes)
+        boundary_edges: List[Tuple[int, int]] = []
+
+        for edge_id, (va, vb) in geo.edge_to_vertices.items():
+            hexes_a = geo.vertex_to_hexes[va]
+            hexes_b = geo.vertex_to_hexes[vb]
+
+            # Check if vertices touch both playable and water hexes
+            has_playable_a = any(h < 19 for h in hexes_a)
+            has_water_a = any(h >= 19 for h in hexes_a)
+            has_playable_b = any(h < 19 for h in hexes_b)
+            has_water_b = any(h >= 19 for h in hexes_b)
+
+            boundary_a = has_playable_a and has_water_a
+            boundary_b = has_playable_b and has_water_b
+
+            # Edge is on boundary if both vertices are boundary vertices
+            if boundary_a and boundary_b:
+                boundary_edges.append((va, vb))
+
+        # Standard Catan port distribution: 4x generic 3:1, 1 of each resource 2:1
+        port_resources = [
+            None, None, None, None,  # 4x generic 3:1
+            Resource.WOOD, Resource.BRICK, Resource.SHEEP, Resource.WHEAT, Resource.ORE  # 5x resource 2:1
+        ]
+
+        # Shuffle and select 9 boundary edges
+        rng.shuffle(boundary_edges)
+        selected_edges = boundary_edges[:9]
+
+        # Shuffle resources and assign
+        rng.shuffle(port_resources)
+
+        ports = [Port(vertices=edge, resource=port_resources[i]) for i, edge in enumerate(selected_edges)]
         return ports
 
     def port_for_vertex(self, vertex_id: int) -> Optional[Port]:
