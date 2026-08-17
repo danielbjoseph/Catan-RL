@@ -183,11 +183,11 @@ class BoardGeometry:
             pos_to_vid[pos] = vid
         n_vertices = len(sorted_positions)
 
-        # Build hex_to_vertices for playable hexes only, tracking higher-precision positions
+        # Build hex_to_vertices for both playable and water hexes, tracking higher-precision positions
         # (the dedup keys are rounded to 5 decimals; 6-decimal raw positions are precise)
         hex_to_vertices: Dict[int, List[int]] = {}
         raw_pos_by_vid: Dict[int, Tuple[float, float]] = {}
-        # Map playable coords to indices in the full coords list
+        # Map all coords (playable + water) to indices in the full coords list
         coord_to_full_idx = {c: i for i, c in enumerate(all_coords_for_vertices)}
 
         # Populate raw_pos_by_vid for ALL vertices (including water hexes)
@@ -196,14 +196,23 @@ class BoardGeometry:
                 vid = pos_to_vid[_round_pos(p)]
                 raw_pos_by_vid.setdefault(vid, p)
 
-        # Build hex_to_vertices mapping for playable hexes only
-        for hi, (q, r) in enumerate(coords):
-            full_idx = coord_to_full_idx[(q, r)]
+        # Build hex_to_vertices mapping for both playable and water hexes
+        # Playable hexes get IDs 0-18, water hexes get IDs 19-36
+        for full_idx, (q, r) in enumerate(all_coords_for_vertices):
+            # Map to proper hex ID: playable hexes are 0-18, water hexes are 19+
+            if (q, r) in coord_to_hex:
+                # Playable hex
+                hi = coord_to_hex[(q, r)]
+            else:
+                # Water hex - assign ID starting from 19
+                hi = 19 + (full_idx - len(coords))
+
             verts = hex_raw_vertices[full_idx]
             vids = [pos_to_vid[_round_pos(p)] for p in verts]
             hex_to_vertices[hi] = vids
 
         # Build edges: each edge is a frozenset of two adjacent vertices on same hex
+        # Only use playable hexes for edges
         edge_set: Dict[FrozenSet[int], int] = {}
         hex_to_edges: Dict[int, List[int]] = {i: [] for i in range(len(coords))}
         edge_to_vertices: Dict[int, Tuple[int, int]] = {}
@@ -225,11 +234,12 @@ class BoardGeometry:
                     edge_to_hexes[eid].append(hi)
         n_edges = len(edge_set)
 
-        # Build vertex_to_hexes, vertex_to_vertices, vertex_to_edges
+        # Build vertex_to_hexes (includes water hexes), vertex_to_vertices, vertex_to_edges
         vertex_to_hexes: Dict[int, List[int]] = {v: [] for v in range(n_vertices)}
         vertex_to_vertices: Dict[int, List[int]] = {v: [] for v in range(n_vertices)}
         vertex_to_edges: Dict[int, List[int]] = {v: [] for v in range(n_vertices)}
 
+        # Include all hexes (playable and water) in vertex_to_hexes
         for hi, vids in hex_to_vertices.items():
             for v in vids:
                 if hi not in vertex_to_hexes[v]:
