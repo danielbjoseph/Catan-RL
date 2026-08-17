@@ -17,6 +17,7 @@ experiment_name: ppo_baseline
 seed: 42
 iterations: 500
 games_per_iteration: 16
+num_workers: null  # null = auto-detect CPU count; set to integer to override
 eval_interval: 25          # iterations between eval passes
 eval_games: 12             # games per opponent during eval
 checkpoint_interval: 25    # iterations between checkpoints
@@ -24,5 +25,21 @@ rules_profile: simplified_v1
 max_turns: 500
 reward_win: 1.0
 reward_loss: -1.0
+
+# Observation mode (consumed by SelfPlayTrainer -> CatanAECEnv/evaluate/checkpointing):
+#   self_play (1520 floats) - exact self info, public opponent info only
+#   perfect   (1565 floats) - exact info for all players (Mode A / oracle)
+#   realistic (1549 floats) - self_play base + noised opponent-hand beliefs,
+#                             believed dev-deck composition and bank; requires
+#                             a table-view BeliefTracker (env owns it automatically)
+#   global    (1576 floats) - perfect base + exact remaining dev-deck composition and bank
 obs_mode: self_play
+
+# realistic mode only: how strongly the believed opponent-hand vector is
+# blended toward a uniform prior (0 = pure tracker estimate, 1 = uniform)
+belief_blend: 0.25
+# realistic mode only: stddev scale of Gaussian noise applied on top of the
+# blended belief vector (0 = no noise)
+belief_noise: 0.5
+
 device: cpu

@@ -99,6 +99,10 @@ def pick_action(state: "GameState", rng: random.Random | None = None) -> "Action
         return by_type[ActionType.ROLL_DICE][0]
     if ActionType.DISCARD_RESOURCE in by_type:
         return most_held_resource_action(state, by_type[ActionType.DISCARD_RESOURCE])
+    if ActionType.DECLINE_TRADE in by_type:
+        # Plain bots don't reason about trades; conservatively decline
+        # rather than falling through to rng.choice on trade responses.
+        return by_type[ActionType.DECLINE_TRADE][0]
     if ActionType.MOVE_ROBBER in by_type:
         return max(by_type[ActionType.MOVE_ROBBER], key=lambda a: _robber_score(state, a.hex_id))
     if ActionType.CHOOSE_STEAL_TARGET in by_type:

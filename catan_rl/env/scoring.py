@@ -112,22 +112,43 @@ def compute_longest_road(
 
 
 def update_longest_road(state: "GameState"):
-    """Recompute longest road and update the holder. Mutates state."""
-    lengths = [compute_longest_road(pid, state) for pid in range(state.n_players)]
+    """Recompute longest road and update the holder. Mutates state.
 
-    current_holder = state.longest_road_holder
-    if current_holder is not None:
-        # Holder loses the card only if someone has strictly longer
-        for pid, length in enumerate(lengths):
-            if pid != current_holder and length > lengths[current_holder]:
-                state.longest_road_holder = pid
-                break
+    Official rule: recompute on every road/settlement change; the holder
+    keeps the card only while still >= LONGEST_ROAD_MIN and not strictly
+    beaten. If the holder drops below the minimum, the card passes to the
+    unique player at the new maximum (>= minimum); on a tie, or if nobody
+    qualifies, nobody holds it.
+    """
+    lengths = [compute_longest_road(pid, state) for pid in range(state.n_players)]
+    holder = state.longest_road_holder
+    if holder is not None:
+        challengers = [
+            pid for pid, ln in enumerate(lengths)
+            if pid != holder and ln > lengths[holder] and ln >= LONGEST_ROAD_MIN
+        ]
+        if challengers:
+            best = max(lengths[pid] for pid in challengers)
+            top = [pid for pid in challengers if lengths[pid] == best]
+            # A unique strict challenger takes the card; a tie among
+            # challengers means nobody holds it, even though the dethroned
+            # holder itself may still meet the >=5 minimum.
+            state.longest_road_holder = top[0] if len(top) == 1 else None
+            return
+        if lengths[holder] < LONGEST_ROAD_MIN:
+            eligible = [ln for ln in lengths if ln >= LONGEST_ROAD_MIN]
+            if eligible:
+                best = max(eligible)
+                cands = [pid for pid, ln in enumerate(lengths) if ln == best]
+                state.longest_road_holder = cands[0] if len(cands) == 1 else None
+            else:
+                state.longest_road_holder = None
     else:
-        # No holder yet; award to first player with >= LONGEST_ROAD_MIN
-        best_len = max(lengths)
-        if best_len >= LONGEST_ROAD_MIN:
-            best_pid = lengths.index(best_len)
-            state.longest_road_holder = best_pid
+        best = max(lengths)
+        if best >= LONGEST_ROAD_MIN:
+            cands = [pid for pid, ln in enumerate(lengths) if ln == best]
+            if len(cands) == 1:
+                state.longest_road_holder = cands[0]
 
 
 def update_largest_army(state: "GameState"):

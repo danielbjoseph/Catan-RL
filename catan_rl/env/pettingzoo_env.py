@@ -16,7 +16,7 @@ Rewards:
   +1 to the winner, -1 to all others, emitted at game end.
   0 at every intermediate step.
 
-Infos always contain "action_mask": np.ndarray of shape (256,) bool.
+Infos always contain "action_mask": np.ndarray of shape (CATALOG_SIZE,) bool.
 """
 
 from __future__ import annotations
@@ -28,9 +28,10 @@ import numpy as np
 
 from .action_mask import legal_action_mask
 from .actions import CATALOG, CATALOG_SIZE
+from .belief import BeliefTracker
 from .board import BoardConfig
 from .game_state import GameState, Phase
-from .observation import OBS_DIM, OBS_DIM_PERFECT, make_observation
+from .observation import obs_dim_for_mode, make_observation
 from .rules import apply_action
 
 _AGENTS = [f"player_{i}" for i in range(4)]
@@ -57,6 +58,8 @@ class CatanAECEnv:
         reward_loss: float = -1.0,
         max_turns: int = 500,
         rules_profile=None,
+        belief_blend: float = 0.25,
+        belief_noise: float = 0.5,
     ):
         from .rules_profile import RulesProfile
 
@@ -65,14 +68,18 @@ class CatanAECEnv:
         self.reward_win = reward_win
         self.reward_loss = reward_loss
         self.max_turns = max_turns
+        self.belief_blend = belief_blend
+        self.belief_noise = belief_noise
 
         self.possible_agents: List[str] = list(_AGENTS)
-        self.observation_space_dim: int = OBS_DIM if obs_mode == "self_play" else OBS_DIM_PERFECT
+        self.observation_space_dim: int = obs_dim_for_mode(obs_mode)
         self.action_space_size: int = CATALOG_SIZE
 
         # Mutable env state — initialised in reset()
         self._state: Optional[GameState] = None
         self._rng: Optional[random.Random] = None
+        self._belief: Optional[BeliefTracker] = None
+        self._seed: int = 0
         self.agents: List[str] = []
         self.agent_selection: str = ""
         self.rewards: Dict[str, float] = {}
@@ -90,6 +97,7 @@ class CatanAECEnv:
         seed: Optional[int] = None,
         options: Optional[dict] = None,
     ) -> None:
+        self._seed = seed if seed is not None else 0
         self._rng = random.Random(seed)
         board_seed = self._rng.randint(0, 2**31)
         config = BoardConfig.standard(seed=board_seed)
@@ -97,6 +105,7 @@ class CatanAECEnv:
         self._state = GameState.new_game(
             config, n_players=4, seed=game_seed, profile=self.rules_profile
         )
+        self._belief = BeliefTracker(self._state) if self.obs_mode == "realistic" else None
 
         self.agents = list(self.possible_agents)
         self._sync_agent_selection()
@@ -132,7 +141,12 @@ class CatanAECEnv:
         if not (0 <= action < CATALOG_SIZE):
             raise ValueError(f"action {action} out of range [0, {CATALOG_SIZE})")
         catalog_action = CATALOG[action]
-        apply_action(state, catalog_action, self._rng)
+        if self._belief is not None:
+            before = state.clone()
+            apply_action(state, catalog_action, self._rng)
+            self._belief.on_action(before, catalog_action, state)
+        else:
+            apply_action(state, catalog_action, self._rng)
 
         # Check terminal conditions
         if state.is_terminal:
@@ -164,7 +178,18 @@ class CatanAECEnv:
         if self._state is None:
             raise RuntimeError("Call reset() before observe().")
         pid = int(agent.split("_")[1])
-        obs = make_observation(self._state, observer=pid, mode=self.obs_mode)
+        if self.obs_mode == "realistic":
+            noise_cfg = {
+                "belief_blend": self.belief_blend,
+                "belief_noise": self.belief_noise,
+                "seed": self._seed,
+            }
+            obs = make_observation(
+                self._state, observer=pid, mode=self.obs_mode,
+                belief=self._belief, noise_cfg=noise_cfg,
+            )
+        else:
+            obs = make_observation(self._state, observer=pid, mode=self.obs_mode)
         mask = self._make_mask(pid)
         return {"observation": obs, "action_mask": mask}
 

@@ -10,7 +10,7 @@ import pytest
 from catan_rl.env.board import BoardConfig
 from catan_rl.env.game_state import GameState, Phase
 from catan_rl.env.observation import (
-    OBS_DIM, OBS_DIM_PERFECT, _N_HEX, _N_VERTEX, _N_EDGE,
+    OBS_DIM, OBS_DIM_PERFECT, _N_HEX, _N_VERTEX, _N_EDGE, _SEG_TRADE,
     make_observation,
 )
 from catan_rl.env.rules import apply_action
@@ -118,8 +118,10 @@ class TestObservationValues:
         obs_pf = make_observation(state, observer=1, mode="perfect")
         # Perfect mode is longer
         assert len(obs_pf) > len(obs_sp)
-        # The extra section should encode player 0's resources
-        extra = obs_pf[OBS_DIM:]
+        # The extra section should encode player 0's resources. It starts
+        # right after the shared base (OBS_DIM minus the trailing trade
+        # block, which is appended last and isn't part of the base).
+        extra = obs_pf[OBS_DIM - _SEG_TRADE:]
         # Player 0 has 3 wood; first opponent from observer=1 is player 2... wait
         # From observer=1, opponents in order are: player_2 (rel 1), player_3 (rel 2), player_0 (rel 3)
         # Player 0 is at relative index 3 -> extra[2*15 .. 2*15+5]
@@ -132,8 +134,9 @@ class TestObservationValues:
         assert state.phase in (Phase.SETUP_SETTLEMENT_1, Phase.SETUP_ROAD_1,
                                 Phase.SETUP_SETTLEMENT_2, Phase.SETUP_ROAD_2)
         obs = make_observation(state, observer=0)
-        # is_setup flag is last element of turn context (last segment)
-        assert obs[-1] == pytest.approx(1.0), "is_setup should be 1.0 during setup"
+        # is_setup flag is the last element of the turn-context segment,
+        # which is now followed by the trailing 28-dim trade block.
+        assert obs[-(1 + _SEG_TRADE)] == pytest.approx(1.0), "is_setup should be 1.0 during setup"
 
     def test_setup_flag_cleared(self):
         state = make_state()
@@ -141,4 +144,4 @@ class TestObservationValues:
         fast_forward_setup(state, rng)
         assert state.phase == Phase.ROLL
         obs = make_observation(state, observer=0)
-        assert obs[-1] == pytest.approx(0.0), "is_setup should be 0.0 after setup"
+        assert obs[-(1 + _SEG_TRADE)] == pytest.approx(0.0), "is_setup should be 0.0 after setup"

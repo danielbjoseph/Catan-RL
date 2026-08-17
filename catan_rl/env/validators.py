@@ -14,10 +14,10 @@ from typing import List, TYPE_CHECKING
 from .actions import (
     Action, Resource, DevCard,
     ROLL_DICE, END_TURN, BUY_DEV_CARD, PLAY_KNIGHT, PLAY_ROAD_BUILDING,
-    PLAY_VICTORY_POINT,
     road_action, settlement_action, city_action, move_robber_action,
     steal_action, maritime_trade_action, discard_action,
     year_of_plenty_action, monopoly_action,
+    propose_trade_action, ACCEPT_TRADE, DECLINE_TRADE,
 )
 from .game_state import Phase
 
@@ -32,7 +32,11 @@ def legal_actions(state: "GameState") -> List[Action]:
     if phase == Phase.SETUP_ROAD_1 or phase == Phase.SETUP_ROAD_2:
         return _setup_road_actions(state)
     if phase == Phase.ROLL:
-        return [ROLL_DICE]
+        # Official rule: one dev card may be played at any time during your
+        # turn, including before the roll (knight-before-roll unblocks your
+        # own hexes). ROLL_DICE remains mandatory eventually, but is not the
+        # only legal action while a pre-roll dev card play is available.
+        return [ROLL_DICE] + _dev_card_actions(state)
     if phase == Phase.ROBBER:
         return _robber_actions(state)
     if phase == Phase.STEAL:
@@ -47,6 +51,8 @@ def legal_actions(state: "GameState") -> List[Action]:
         return actions
     if phase == Phase.MAIN:
         return _main_actions(state)
+    if phase == Phase.TRADE_RESPONSE:
+        return [ACCEPT_TRADE, DECLINE_TRADE]
     return []
 
 
@@ -59,7 +65,7 @@ def _setup_settlement_actions(state: "GameState") -> List[Action]:
     occupied = state.all_occupied_vertices()
     geo = state.config.geometry
     actions = []
-    for v in range(geo.n_vertices):
+    for v in range(54):  # Only playable vertices (0-53)
         if v in occupied:
             continue
         # Distance rule: no neighbor may be occupied
@@ -130,7 +136,7 @@ def _steal_actions(state: "GameState") -> List[Action]:
     for v in adjacent_vertices:
         if v in occupied:
             pid = occupied[v]
-            if pid != state.current_player:
+            if pid != state.current_player and state.players[pid].total_resources > 0:
                 targets.add(pid)
     # If no targets (no opponents adjacent), skip steal by returning END_TURN-like empty
     if not targets:
@@ -194,22 +200,18 @@ def _main_actions(state: "GameState") -> List[Action]:
     # Maritime trades
     actions.extend(_maritime_trade_actions(state))
 
+    # P2P trade proposals
+    if state.profile.trades_enabled and state.trades_proposed_this_turn < state.profile.max_trades_per_turn:
+        for give in Resource:
+            for get in Resource:
+                if give == get:
+                    continue
+                for n in (1, 2):
+                    if player.resources[int(give)] >= n:
+                        actions.append(propose_trade_action(give, get, n))
+
     # Play dev cards
-    if dev_enabled and not player.has_played_dev_card:
-        if player.dev_cards[int(DevCard.KNIGHT)] > 0:
-            actions.append(PLAY_KNIGHT)
-        if player.dev_cards[int(DevCard.ROAD_BUILDING)] > 0:
-            actions.append(PLAY_ROAD_BUILDING)
-        if player.dev_cards[int(DevCard.YEAR_OF_PLENTY)] > 0:
-            for a in Resource:
-                for b in Resource:
-                    if b >= a:
-                        actions.append(year_of_plenty_action(a, b))
-        if player.dev_cards[int(DevCard.MONOPOLY)] > 0:
-            for r in Resource:
-                actions.append(monopoly_action(r))
-        if player.dev_cards[int(DevCard.VICTORY_POINT)] > 0:
-            actions.append(PLAY_VICTORY_POINT)
+    actions.extend(_dev_card_actions(state))
 
     actions.append(END_TURN)
     return actions
@@ -218,6 +220,42 @@ def _main_actions(state: "GameState") -> List[Action]:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _dev_card_actions(state: "GameState") -> List[Action]:
+    """Dev card plays currently legal for the current player: gated by
+    profile (dev_cards_enabled), the one-per-turn allowance
+    (has_played_dev_card), and holding the card in `dev_cards` (cards bought
+    this turn live in `dev_cards_new` and are NOT playable yet).
+
+    Shared by both the ROLL phase (official rule: one dev card may be
+    played at any time during your turn, including before the roll) and the
+    MAIN phase.
+    """
+    actions: List[Action] = []
+    player = state.current
+    if not state.profile.dev_cards_enabled or player.has_played_dev_card:
+        return actions
+
+    if player.dev_cards[int(DevCard.KNIGHT)] > 0:
+        actions.append(PLAY_KNIGHT)
+    if player.dev_cards[int(DevCard.ROAD_BUILDING)] > 0:
+        actions.append(PLAY_ROAD_BUILDING)
+    if player.dev_cards[int(DevCard.YEAR_OF_PLENTY)] > 0:
+        for a in Resource:
+            for b in Resource:
+                if b >= a:
+                    actions.append(year_of_plenty_action(a, b))
+    if player.dev_cards[int(DevCard.MONOPOLY)] > 0:
+        for r in Resource:
+            actions.append(monopoly_action(r))
+    # VICTORY_POINT cards are never played (see PlayerState.hidden_vp) —
+    # they count toward the win condition automatically. Catalog slot
+    # 253 (PLAY_VICTORY_POINT) is intentionally never appended here and
+    # stays permanently masked; the apply_action handler in rules.py is
+    # kept only for backcompat with old recorded traces.
+
+    return actions
+
 
 def _connected_road_actions(state: "GameState") -> List[Action]:
     """

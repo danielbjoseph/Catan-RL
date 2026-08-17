@@ -55,6 +55,26 @@ _DIRECTIONS: List[Tuple[int, int]] = [
     (1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1),
 ]
 
+# Water hexes (ring 3) surrounding the playable board for proper port positioning
+def _generate_ring_3() -> List[Tuple[int, int]]:
+    """Generate all hexes in ring 3 (outer water ring)."""
+    ring = []
+    # Start at direction E (1, 0) and spiral outward
+    q, r = 3, 0
+    for direction_idx in range(6):
+        for step in range(3):
+            ring.append((q, r))
+            # Move to next hex in this direction
+            dq, dr = _DIRECTIONS[(direction_idx + 2) % 6]
+            q += dq
+            r += dr
+    return ring
+
+_WATER_HEX_COORDS: List[Tuple[int, int]] = _generate_ring_3()
+
+# All hex coordinates including water ring
+_ALL_HEX_COORDS: List[Tuple[int, int]] = _HEX_COORDS + _WATER_HEX_COORDS
+
 # Standard hex type distribution (19 hexes)
 _STANDARD_RESOURCES: List[HexType] = (
     [HexType.DESERT]
@@ -134,16 +154,22 @@ class BoardGeometry:
     edge_to_hexes:   Dict[int, List[int]]          # edge -> [hex_ids]
     coord_to_hex:    Dict[Tuple[int, int], int]    # (q,r) -> hex_id
 
+    vertex_positions: Tuple[Tuple[float, float], ...]  # (x, y) for vertex i
+    hex_centers: Tuple[Tuple[float, float], ...]       # (x, y) for hex i
+
     @classmethod
     def build(cls) -> BoardGeometry:
+        # Use playable hexes only for the main board
         coords = _HEX_COORDS
+        # But include water hexes when collecting vertices (for port positioning)
+        all_coords_for_vertices = _ALL_HEX_COORDS
         coord_set = set(coords)
         coord_to_hex = {c: i for i, c in enumerate(coords)}
 
-        # Collect all vertex positions keyed by rounded (x, y)
+        # Collect all vertex positions (including from water hexes) keyed by rounded (x, y)
         pos_to_vid: dict = {}
         hex_raw_vertices: List[List[Tuple[float, float]]] = []
-        for q, r in coords:
+        for q, r in all_coords_for_vertices:
             verts = _hex_vertex_positions(q, r)
             hex_raw_vertices.append(verts)
             for p in verts:
@@ -157,13 +183,36 @@ class BoardGeometry:
             pos_to_vid[pos] = vid
         n_vertices = len(sorted_positions)
 
-        # Build hex_to_vertices
+        # Build hex_to_vertices for both playable and water hexes, tracking higher-precision positions
+        # (the dedup keys are rounded to 5 decimals; 6-decimal raw positions are precise)
         hex_to_vertices: Dict[int, List[int]] = {}
-        for hi, (q, r) in enumerate(coords):
-            verts = hex_raw_vertices[hi]
-            hex_to_vertices[hi] = [pos_to_vid[_round_pos(p)] for p in verts]
+        raw_pos_by_vid: Dict[int, Tuple[float, float]] = {}
+        # Map all coords (playable + water) to indices in the full coords list
+        coord_to_full_idx = {c: i for i, c in enumerate(all_coords_for_vertices)}
+
+        # Populate raw_pos_by_vid for ALL vertices (including water hexes)
+        for hi, verts in enumerate(hex_raw_vertices):
+            for p in verts:
+                vid = pos_to_vid[_round_pos(p)]
+                raw_pos_by_vid.setdefault(vid, p)
+
+        # Build hex_to_vertices mapping for both playable and water hexes
+        # Playable hexes get IDs 0-18, water hexes get IDs 19-36
+        for full_idx, (q, r) in enumerate(all_coords_for_vertices):
+            # Map to proper hex ID: playable hexes are 0-18, water hexes are 19+
+            if (q, r) in coord_to_hex:
+                # Playable hex
+                hi = coord_to_hex[(q, r)]
+            else:
+                # Water hex - assign ID starting from 19
+                hi = 19 + (full_idx - len(coords))
+
+            verts = hex_raw_vertices[full_idx]
+            vids = [pos_to_vid[_round_pos(p)] for p in verts]
+            hex_to_vertices[hi] = vids
 
         # Build edges: each edge is a frozenset of two adjacent vertices on same hex
+        # Only use playable hexes for edges
         edge_set: Dict[FrozenSet[int], int] = {}
         hex_to_edges: Dict[int, List[int]] = {i: [] for i in range(len(coords))}
         edge_to_vertices: Dict[int, Tuple[int, int]] = {}
@@ -185,11 +234,12 @@ class BoardGeometry:
                     edge_to_hexes[eid].append(hi)
         n_edges = len(edge_set)
 
-        # Build vertex_to_hexes, vertex_to_vertices, vertex_to_edges
+        # Build vertex_to_hexes (includes water hexes), vertex_to_vertices, vertex_to_edges
         vertex_to_hexes: Dict[int, List[int]] = {v: [] for v in range(n_vertices)}
         vertex_to_vertices: Dict[int, List[int]] = {v: [] for v in range(n_vertices)}
         vertex_to_edges: Dict[int, List[int]] = {v: [] for v in range(n_vertices)}
 
+        # Include all hexes (playable and water) in vertex_to_hexes
         for hi, vids in hex_to_vertices.items():
             for v in vids:
                 if hi not in vertex_to_hexes[v]:
@@ -216,6 +266,8 @@ class BoardGeometry:
             edge_to_vertices=edge_to_vertices,
             edge_to_hexes=edge_to_hexes,
             coord_to_hex=coord_to_hex,
+            vertex_positions=tuple(raw_pos_by_vid[vid] for vid in range(n_vertices)),
+            hex_centers=tuple(_hex_center(q, r) for q, r in coords),
         )
 
     def hex_neighbors(self, hex_id: int) -> List[int]:
@@ -289,7 +341,16 @@ class BoardConfig:
                 tokens[hi] = token_list[ti]
                 ti += 1
 
-        ports = cls._build_ports(geo)
+        # Ensure 6s and 8s never touch (Catan rules)
+        while cls._has_adjacent_hot_tokens(geo, tokens):
+            rng.shuffle(token_list)
+            ti = 0
+            for hi, res in enumerate(resources):
+                if res != HexType.DESERT:
+                    tokens[hi] = token_list[ti]
+                    ti += 1
+
+        ports = cls._build_ports(geo, rng)
         return cls(
             geometry=geo,
             hex_resources=tuple(resources),
@@ -299,16 +360,57 @@ class BoardConfig:
         )
 
     @classmethod
-    def _build_ports(cls, geo: BoardGeometry) -> List[Port]:
-        ports: List[Port] = []
-        coord_to_hex = geo.coord_to_hex
-        for q, r, vi, vj, resource in _PORT_DEFS:
-            if (q, r) not in coord_to_hex:
-                continue
-            hi = coord_to_hex[(q, r)]
-            vids = geo.hex_to_vertices[hi]
-            va, vb = vids[vi % 6], vids[vj % 6]
-            ports.append(Port(vertices=(va, vb), resource=resource))
+    def _has_adjacent_hot_tokens(cls, geo: BoardGeometry, tokens: List[int]) -> bool:
+        """Check if any 6 or 8 tokens are adjacent to each other."""
+        for hex_id in range(len(tokens)):
+            token = tokens[hex_id]
+            if token in (6, 8):
+                neighbors = geo.hex_neighbors(hex_id)
+                for neighbor_id in neighbors:
+                    if tokens[neighbor_id] in (6, 8):
+                        return True
+        return False
+
+    @classmethod
+    def _build_ports(cls, geo: BoardGeometry, rng: Optional[random.Random] = None) -> List[Port]:
+        """Compute ports dynamically from boundary edges (edges between playable and water hexes)."""
+        if rng is None:
+            rng = random.Random()
+
+        # Find all boundary edges (connecting playable and water hexes)
+        boundary_edges: List[Tuple[int, int]] = []
+
+        for edge_id, (va, vb) in geo.edge_to_vertices.items():
+            hexes_a = geo.vertex_to_hexes[va]
+            hexes_b = geo.vertex_to_hexes[vb]
+
+            # Check if vertices touch both playable and water hexes
+            has_playable_a = any(h < 19 for h in hexes_a)
+            has_water_a = any(h >= 19 for h in hexes_a)
+            has_playable_b = any(h < 19 for h in hexes_b)
+            has_water_b = any(h >= 19 for h in hexes_b)
+
+            boundary_a = has_playable_a and has_water_a
+            boundary_b = has_playable_b and has_water_b
+
+            # Edge is on boundary if both vertices are boundary vertices
+            if boundary_a and boundary_b:
+                boundary_edges.append((va, vb))
+
+        # Standard Catan port distribution: 4x generic 3:1, 1 of each resource 2:1
+        port_resources = [
+            None, None, None, None,  # 4x generic 3:1
+            Resource.WOOD, Resource.BRICK, Resource.SHEEP, Resource.WHEAT, Resource.ORE  # 5x resource 2:1
+        ]
+
+        # Shuffle and select 9 boundary edges
+        rng.shuffle(boundary_edges)
+        selected_edges = boundary_edges[:9]
+
+        # Shuffle resources and assign
+        rng.shuffle(port_resources)
+
+        ports = [Port(vertices=edge, resource=port_resources[i]) for i, edge in enumerate(selected_edges)]
         return ports
 
     def port_for_vertex(self, vertex_id: int) -> Optional[Port]:

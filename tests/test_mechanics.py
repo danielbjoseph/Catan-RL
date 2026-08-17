@@ -607,6 +607,7 @@ class TestRobber:
             p.city_vertices -= adj_verts
 
         state.phase = Phase.ROBBER
+        state.rolled_this_turn = True  # this scenario is post-roll (7 or post-roll knight)
         apply_action(state, move_robber_action(desert_hex))
 
         # No opponents adjacent, so should skip straight to MAIN
@@ -1006,6 +1007,7 @@ class TestDevCardEffects:
         p.resources = [0] * 5  # no resources — roads should be free
         roads_before = p.roads_built
         state.phase = Phase.MAIN
+        state.rolled_this_turn = True  # already rolled to reach MAIN this turn
 
         apply_action(state, PLAY_ROAD_BUILDING)
         assert state.phase == Phase.ROAD_BUILDING_1
@@ -1027,7 +1029,23 @@ class TestDevCardEffects:
 
         assert sum(p.resources) == 0  # no cost
 
-    def test_victory_point_card_adds_vp(self):
+    def test_victory_point_card_adds_vp_as_soon_as_held(self):
+        """VP dev cards are never "played" -- they count automatically the
+        moment they're held, so acquiring one adds a VP with no action."""
+        state = _blank_state(seed=0)
+        p = state.players[0]
+        vp_before = compute_vp(0, state)
+
+        p.dev_cards[int(DevCard.VICTORY_POINT)] = 1
+
+        vp_after = compute_vp(0, state)
+        assert vp_after == vp_before + 1
+
+    def test_playing_victory_point_card_is_a_vp_no_op(self):
+        """The PLAY_VICTORY_POINT apply_action handler is kept only for
+        backcompat with old recorded traces; it moves the card from hand to
+        played, but since both are already counted in hidden_vp, VP is
+        unaffected."""
         state = _blank_state(seed=0)
         p = state.players[0]
         p.dev_cards[int(DevCard.VICTORY_POINT)] = 1
@@ -1036,7 +1054,7 @@ class TestDevCardEffects:
         vp_before = compute_vp(0, state)
         apply_action(state, PLAY_VICTORY_POINT)
         vp_after = compute_vp(0, state)
-        assert vp_after == vp_before + 1
+        assert vp_after == vp_before
 
     def test_cannot_play_card_bought_this_turn(self):
         state = _blank_state(seed=0)

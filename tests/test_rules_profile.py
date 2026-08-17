@@ -116,6 +116,26 @@ class TestSerialization:
         assert restored.profile == profile
 
 
+class TestTrading:
+    def test_trading_profiles_builtin(self):
+        p = RulesProfile.get("standard_trading")
+        assert p.trades_enabled and p.dev_cards_enabled and p.max_trades_per_turn == 3
+        q = RulesProfile.get("simplified_trading_v1")
+        assert q.trades_enabled and not q.dev_cards_enabled
+
+    def test_existing_profiles_no_trading(self):
+        assert not RulesProfile.get("standard").trades_enabled
+        assert not RulesProfile.get("simplified_v1").trades_enabled
+
+    def test_from_dict_backcompat_missing_trade_keys(self):
+        p = RulesProfile.from_dict({"name": "standard", "dev_cards_enabled": True, "win_vp": 10})
+        assert p.trades_enabled is False and p.max_trades_per_turn == 3
+
+    def test_round_trip_with_trading(self):
+        p = RulesProfile.get("standard_trading")
+        assert RulesProfile.from_dict(p.to_dict()) == p
+
+
 class TestEnvIntegration:
     def test_aec_env_accepts_profile(self):
         env = CatanAECEnv(rules_profile="simplified_v1")

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Catan RL Dashboard</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="top-bar">
+        <button id="back-btn" class="ghost-btn" hidden>&larr; Back</button>
+        <h1 id="crumb">Catan RL Dashboard</h1>
+      </header>
+
+      <main id="view-runs" class="view">
+        <p class="hint">Select a run to browse its recorded games.</p>
+        <table class="list-table" id="runs-table">
+          <thead>
+            <tr><th>Run</th><th>Traces</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty-msg" id="runs-empty" hidden>No runs found.</p>
+      </main>
+
+      <main id="view-traces" class="view" hidden>
+        <p class="hint" id="traces-hint"></p>
+        <table class="list-table" id="traces-table">
+          <thead>
+            <tr><th>File</th><th>Turns</th><th>Winner</th><th>Seats</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty-msg" id="traces-empty" hidden>No traces found.</p>
+      </main>
+
+      <main id="view-replay" class="view" hidden>
+        <div id="replay-layout">
+          <section class="board-pane">
+            <svg id="board-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+            <div id="trade-banner" class="trade-banner" hidden></div>
+            <div id="controls">
+              <button id="btn-turn-back" class="ctrl-btn" title="Previous turn (Up)">&#9198;</button>
+              <button id="btn-step-back" class="ctrl-btn" title="Previous ply (Left)">&#9664;</button>
+              <button id="btn-play" class="ctrl-btn play-btn" title="Play / pause">&#9654;</button>
+              <button id="btn-step-fwd" class="ctrl-btn" title="Next ply (Right)">&#9654;</button>
+              <button id="btn-turn-fwd" class="ctrl-btn" title="Next turn (Down)">&#9197;</button>
+              <input type="range" id="ply-slider" min="0" max="0" value="0" step="1" />
+              <div id="ply-readout">ply 0/0 &middot; turn 0 &middot; phase &mdash; &middot; player &mdash;</div>
+            </div>
+          </section>
+
+          <section class="panels-pane">
+            <div class="panel" id="players-panel">
+              <h2>Players</h2>
+              <div id="players-table"></div>
+            </div>
+            <div class="panel" id="bank-panel">
+              <h2>Bank &amp; Dev Deck</h2>
+              <div id="bank-row"></div>
+            </div>
+            <div class="panel" id="dice-panel">
+              <h2>Dice</h2>
+              <div id="dice-strip"></div>
+              <div id="dice-histogram"></div>
+            </div>
+          </section>
+
+          <section class="log-pane">
+            <h2>Action Log</h2>
+            <div id="action-log"></div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from catan_rl.env.rules_profile import RulesProfile
 from catan_rl.rl.checkpointing import list_checkpoints
 from catan_rl.rl.self_play import SelfPlayTrainer
@@ -25,8 +27,10 @@ TINY_CONFIG = {
 }
 
 
-def test_tiny_training_run(tmp_path: Path):
-    trainer = SelfPlayTrainer(TINY_CONFIG, run_dir=tmp_path / "run")
+@pytest.mark.parametrize("obs_mode", ["self_play", "realistic", "global"])
+def test_tiny_training_run(tmp_path: Path, obs_mode: str):
+    config = dict(TINY_CONFIG, obs_mode=obs_mode, experiment_name=f"tiny_test_{obs_mode}")
+    trainer = SelfPlayTrainer(config, run_dir=tmp_path / "run")
     trainer.train()
     trainer.close()
 

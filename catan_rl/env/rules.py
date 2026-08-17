@@ -32,7 +32,7 @@ def apply_action(state: "GameState", action: Action, rng: Optional[random.Random
     if t == ActionType.ROLL_DICE:
         _roll_dice(state, rng)
     elif t == ActionType.END_TURN and state.phase in (Phase.ROAD_BUILDING_1, Phase.ROAD_BUILDING_2):
-        state.phase = Phase.MAIN
+        state.phase = _main_return_phase(state)
     elif t == ActionType.END_TURN:
         _end_turn(state)
     elif t == ActionType.BUILD_ROAD:
@@ -61,6 +61,12 @@ def apply_action(state: "GameState", action: Action, rng: Optional[random.Random
         _play_monopoly(state, action.resource)
     elif t == ActionType.PLAY_VICTORY_POINT:
         _play_victory_point(state)
+    elif t == ActionType.PROPOSE_TRADE:
+        _propose_trade(state, action)
+    elif t == ActionType.ACCEPT_TRADE:
+        _respond_trade(state, True)
+    elif t == ActionType.DECLINE_TRADE:
+        _respond_trade(state, False)
     else:
         raise ValueError(f"Unknown action type: {t}")
 
@@ -84,6 +90,8 @@ def _build_settlement(state: "GameState", vertex_id: int):
     elif state.phase == Phase.SETUP_SETTLEMENT_2:
         # Give initial resources for second settlement
         for hex_id in geo.vertex_to_hexes[vertex_id]:
+            if hex_id >= 19:  # Skip water hexes (IDs 19+)
+                continue
             hex_type = state.config.hex_resources[hex_id]
             if hex_type != HexType.DESERT:
                 res = hex_type.to_resource()
@@ -118,9 +126,9 @@ def _build_road(state: "GameState", edge_id: int):
             if player.roads_available >= 1 and _connected_road_actions(state):
                 state.phase = Phase.ROAD_BUILDING_2
             else:
-                state.phase = Phase.MAIN
+                state.phase = _main_return_phase(state)
         else:
-            state.phase = Phase.MAIN
+            state.phase = _main_return_phase(state)
     else:
         player.spend(BUILD_COSTS["road"])
         for r, n in BUILD_COSTS["road"].items():
@@ -182,6 +190,7 @@ def _roll_dice(state: "GameState", rng: random.Random):
     d1 = rng.randint(1, 6)
     d2 = rng.randint(1, 6)
     state.dice = (d1, d2)
+    state.rolled_this_turn = True
     total = d1 + d2
 
     if total == 7:
@@ -192,30 +201,42 @@ def _roll_dice(state: "GameState", rng: random.Random):
 
 
 def _produce_resources(state: "GameState", number: int):
-    config = state.config
-    geo = config.geometry
+    """
+    Compute production for all players, then pay out per resource type
+    according to the official bank-shortage rule: if the bank cannot fully
+    supply all players owed a resource type, no player receives that type
+    (unless exactly one player is owed it — they take what's left).
+    """
+    geo, config = state.config.geometry, state.config
+    occupied = state.all_occupied_vertices()
+    owed = [[0] * 5 for _ in range(state.n_players)]   # pid -> per-resource counts
     for hex_id in range(geo.n_hexes):
-        if config.hex_tokens[hex_id] != number:
-            continue
-        if hex_id == state.robber_hex:
+        if config.hex_tokens[hex_id] != number or hex_id == state.robber_hex:
             continue
         hex_type = config.hex_resources[hex_id]
         if hex_type == HexType.DESERT:
             continue
-        res = hex_type.to_resource()
+        r = int(hex_type.to_resource())
         for v in geo.hex_to_vertices[hex_id]:
-            occ = state.all_occupied_vertices()
-            if v not in occ:
+            pid = occupied.get(v)
+            if pid is None:
                 continue
-            pid = occ[v]
-            player = state.players[pid]
-            is_city = v in player.city_vertices
-            count = 2 if is_city else 1
-            available = state.bank[int(res)]
-            actual = min(count, available)
-            if actual > 0:
-                player.gain(res, actual)
-                state.bank[int(res)] -= actual
+            owed[pid][r] += 2 if v in state.players[pid].city_vertices else 1
+    for r in range(5):
+        demanders = [pid for pid in range(state.n_players) if owed[pid][r] > 0]
+        total = sum(owed[pid][r] for pid in demanders)
+        supply = state.bank[r]
+        if not demanders:
+            continue
+        if total <= supply:
+            for pid in demanders:
+                state.players[pid].resources[r] += owed[pid][r]
+            state.bank[r] -= total
+        elif len(demanders) == 1:
+            pid = demanders[0]
+            state.players[pid].resources[r] += supply
+            state.bank[r] = 0
+        # else: shortage with multiple demanders -> nobody paid
 
 
 def _handle_seven(state: "GameState"):
@@ -238,6 +259,14 @@ def _handle_seven(state: "GameState"):
 # Robber
 # ---------------------------------------------------------------------------
 
+def _main_return_phase(state: "GameState") -> Phase:
+    """Where a turn-action sub-phase (robber/steal/road-building) should
+    return to once resolved: MAIN if dice have already been rolled this
+    turn, otherwise back to ROLL (official rule: one dev card, including a
+    knight, may be played before the roll -- the player still must roll)."""
+    return Phase.MAIN if state.rolled_this_turn else Phase.ROLL
+
+
 def _move_robber(state: "GameState", hex_id: int):
     state.robber_hex = hex_id
     state.pending_steal_hex = hex_id
@@ -247,7 +276,8 @@ def _move_robber(state: "GameState", hex_id: int):
     adjacent_vertices = geo.hex_to_vertices[hex_id]
     occupied = state.all_occupied_vertices()
     targets = {occupied[v] for v in adjacent_vertices
-               if v in occupied and occupied[v] != state.current_player}
+               if v in occupied and occupied[v] != state.current_player
+               and state.players[occupied[v]].total_resources > 0}
 
     if targets:
         state.phase = Phase.STEAL
@@ -255,7 +285,7 @@ def _move_robber(state: "GameState", hex_id: int):
         state.pending_steal_hex = None
         # Return to appropriate phase
         if state.phase == Phase.ROBBER:
-            state.phase = Phase.MAIN
+            state.phase = _main_return_phase(state)
         # (if called from knight, knight handler sets phase)
 
 
@@ -271,7 +301,7 @@ def _steal(state: "GameState", target_player_id: int, rng: random.Random):
         state.current.gain(stolen)
 
     state.pending_steal_hex = None
-    state.phase = Phase.MAIN
+    state.phase = _main_return_phase(state)
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +339,8 @@ def _end_turn(state: "GameState"):
     state.turn_number += 1
     state.current_player = state.turn_number % state.n_players
     state.dice = None
+    state.rolled_this_turn = False
+    state.trades_proposed_this_turn = 0
     state.phase = Phase.ROLL
 
 
@@ -325,6 +357,91 @@ def _maritime_trade(state: "GameState", give: Resource, get: Resource):
     state.bank[int(give)] += rate
     player.gain(get)
     state.bank[int(get)] -= 1
+
+
+# ---------------------------------------------------------------------------
+# P2P trade sub-phase
+# ---------------------------------------------------------------------------
+
+def _responder_order(proposer: int, n_players: int) -> list[int]:
+    """Ascending seats starting at (proposer+1) % n_players, wrapping."""
+    return [(proposer + i) % n_players for i in range(1, n_players)]
+
+
+def _find_next_pending(pending_trade: dict, order: list) -> Optional[int]:
+    for pid in order:
+        if pending_trade["responses"][pid] is None:
+            return pid
+    return None
+
+
+def _propose_trade(state: "GameState", action):
+    proposer = state.current_player
+    give = int(action.resource)
+    get = int(action.resource2)
+    give_n = action.give_n
+    state.trades_proposed_this_turn += 1
+
+    order = _responder_order(proposer, state.n_players)
+    responses = {}
+    for pid in order:
+        if state.players[pid].resources[get] >= 1:
+            responses[pid] = None
+        else:
+            responses[pid] = False  # can't afford to give the wanted resource; auto-decline
+
+    state.pending_trade = {
+        "proposer": proposer,
+        "give": give,
+        "get": get,
+        "give_n": give_n,
+        "responses": responses,
+    }
+
+    next_pid = _find_next_pending(state.pending_trade, order)
+    if next_pid is not None:
+        state.phase = Phase.TRADE_RESPONSE
+        state.current_player = next_pid
+    else:
+        _resolve_trade(state)
+
+
+def _respond_trade(state: "GameState", accept: bool):
+    pending = state.pending_trade
+    pid = state.current_player
+    pending["responses"][pid] = accept
+
+    order = _responder_order(pending["proposer"], state.n_players)
+    next_pid = _find_next_pending(pending, order)
+    if next_pid is not None:
+        state.current_player = next_pid
+    else:
+        _resolve_trade(state)
+
+
+def _resolve_trade(state: "GameState"):
+    pending = state.pending_trade
+    proposer = pending["proposer"]
+    give, get, give_n = pending["give"], pending["get"], pending["give_n"]
+    order = _responder_order(proposer, state.n_players)
+
+    accepter = None
+    for pid in order:
+        if pending["responses"][pid] is True:
+            accepter = pid
+            break
+
+    if accepter is not None:
+        proposer_player = state.players[proposer]
+        accepter_player = state.players[accepter]
+        proposer_player.resources[give] -= give_n
+        accepter_player.resources[give] += give_n
+        accepter_player.resources[get] -= 1
+        proposer_player.resources[get] += 1
+
+    state.pending_trade = None
+    state.current_player = proposer
+    state.phase = Phase.MAIN
 
 
 # ---------------------------------------------------------------------------
