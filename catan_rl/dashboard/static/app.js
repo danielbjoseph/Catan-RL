@@ -228,68 +228,83 @@ function buildBoard() {
   // Debug: Log board center and port distance info
   console.log(`Board center: [${boardCenterX.toFixed(2)}, ${boardCenterY.toFixed(2)}]`);
 
+  // Resource emojis and colors
+  const portEmojis = {
+    null: "📦",
+    "0": "🌲",
+    "1": "🧱",
+    "2": "🐑",
+    "3": "🌾",
+    "4": "⛏️",
+  };
+  const portColors = {
+    null: "#8B4513",
+    "0": "#228B22",
+    "1": "#A0522D",
+    "2": "#FFB6C1",
+    "3": "#FFD700",
+    "4": "#696969",
+  };
+
   (board.ports || []).forEach((port, idx) => {
     const [va, vb] = port.vertices;
     const pa = vp[va], pb = vp[vb];
 
-    // Pick vertex that touches water hexes (IDs 19+)
+    // Check if vertices are boundary vertices (touch both playable and water hexes)
     const hexesA = geo.vertex_to_hexes ? geo.vertex_to_hexes[va] || [] : [];
     const hexesB = geo.vertex_to_hexes ? geo.vertex_to_hexes[vb] || [] : [];
 
+    const hasPlayableA = hexesA.some(h => h < 19);
+    const hasPlayableB = hexesB.some(h => h < 19);
     const hasWaterA = hexesA.some(h => h >= 19);
     const hasWaterB = hexesB.some(h => h >= 19);
 
-    let pickedVid, px, py;
-    if (hasWaterA && !hasWaterB) {
-      pickedVid = va;
-      px = pa[0];
-      py = pa[1];
-    } else if (hasWaterB && !hasWaterA) {
-      pickedVid = vb;
-      px = pb[0];
-      py = pb[1];
-    } else {
-      // Both or neither touch water - use furthest from center as fallback
-      const distA = Math.sqrt((pa[0] - boardCenterX) ** 2 + (pa[1] - boardCenterY) ** 2);
-      const distB = Math.sqrt((pb[0] - boardCenterX) ** 2 + (pb[1] - boardCenterY) ** 2);
-      pickedVid = distA > distB ? va : vb;
-      px = distA > distB ? pa[0] : pb[0];
-      py = distA > distB ? pa[1] : pb[1];
+    const isBoundaryA = hasPlayableA && hasWaterA;
+    const isBoundaryB = hasPlayableB && hasWaterB;
+
+    // Skip if neither vertex is on boundary
+    if (!isBoundaryA && !isBoundaryB) {
+      return;
     }
 
-    // Debug: Log which vertex was picked
-    const resource = port.resource === null ? "3:1" : ["wood", "brick", "sheep", "wheat", "ore"][port.resource];
-    console.log(`Port ${idx} (${resource}): va=${va}(water=${hasWaterA}), vb=${vb}(water=${hasWaterB}) → using vertex ${pickedVid}`);
+    // Calculate apex point (outside the board)
+    const midX = (pa[0] + pb[0]) / 2;
+    const midY = (pa[1] + pb[1]) / 2;
+    const dx = midX - boardCenterX;
+    const dy = midY - boardCenterY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const outDist = dist * 0.35;
+    const apexX = midX + (dx / dist) * outDist;
+    const apexY = midY + (dy / dist) * outDist;
 
-    // Draw dashed line from vertex va to port label (neutral color for all)
-    const line1 = svgEl("line", {
-      x1: tx(pa[0]), y1: ty(pa[1]),
-      x2: tx(px), y2: ty(py),
-      class: "port-connector",
+    // Draw triangle connecting both vertices to apex
+    const portColor = portColors[String(port.resource)];
+    const trianglePath = `M${tx(pa[0])},${ty(pa[1])} L${tx(pb[0])},${ty(pb[1])} L${tx(apexX)},${ty(apexY)} Z`;
+    const triangle = svgEl("path", {
+      d: trianglePath,
+      fill: portColor,
+      opacity: "0.3",
+      stroke: portColor,
+      "stroke-width": "0.03",
     });
-    staticLayer.appendChild(line1);
+    staticLayer.appendChild(triangle);
 
-    // Draw dashed line from vertex vb to port label (neutral color for all)
-    const line2 = svgEl("line", {
-      x1: tx(pb[0]), y1: ty(pb[1]),
-      x2: tx(px), y2: ty(py),
-      class: "port-connector",
-    });
-    staticLayer.appendChild(line2);
-
-    // Draw port label off the board
+    // Draw emoji label at apex
+    const emoji = portEmojis[String(port.resource)];
     const text = svgEl("text", {
-      x: tx(px), y: ty(py),
-      class: "port-label",
+      x: tx(apexX), y: ty(apexY),
+      class: "port-emoji",
+      "font-size": "0.6px",
+      "text-anchor": "middle",
+      "dominant-baseline": "central",
+      fill: portColor,
+      "font-weight": "bold",
     });
-    text.textContent = port.resource === null || port.resource === undefined
-      ? "3:1"
-      : RESOURCE_ABBR[port.resource];
+    text.textContent = emoji;
 
-    // Add tooltip showing full resource name
     const fullLabel = port.resource === null || port.resource === undefined
-      ? "3:1 generic"
-      : `${RESOURCE_NAMES[port.resource]} 2:1`;
+      ? "3:1 generic port"
+      : `${RESOURCE_NAMES[port.resource]} 2:1 port`;
     const title = svgEl("title", {});
     title.textContent = fullLabel;
     text.appendChild(title);
