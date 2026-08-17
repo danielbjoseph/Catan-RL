@@ -638,6 +638,11 @@ const svg = document.getElementById("board-svg");
 let scale = 1;
 const minScale = 0.5;
 const maxScale = 5;
+let isPanning = false;
+let panStartX = 0;
+let panStartY = 0;
+let panStartVbX = 0;
+let panStartVbY = 0;
 
 svg.addEventListener("wheel", (e) => {
   if (document.getElementById("view-replay").hidden) return;
@@ -660,6 +665,37 @@ svg.addEventListener("wheel", (e) => {
   vb.y += scaleChange * (mouseY / rect.height);
   vb.width = newWidth;
   vb.height = newHeight;
+});
+
+svg.addEventListener("mousedown", (e) => {
+  if (document.getElementById("view-replay").hidden) return;
+  isPanning = true;
+  panStartX = e.clientX;
+  panStartY = e.clientY;
+  const vb = svg.viewBox.baseVal;
+  panStartVbX = vb.x;
+  panStartVbY = vb.y;
+  svg.style.cursor = "grabbing";
+});
+
+document.addEventListener("mousemove", (e) => {
+  if (!isPanning) return;
+
+  const rect = svg.getBoundingClientRect();
+  const deltaX = e.clientX - panStartX;
+  const deltaY = e.clientY - panStartY;
+
+  const vb = svg.viewBox.baseVal;
+  const worldDeltaX = -(deltaX / rect.width) * vb.width;
+  const worldDeltaY = -(deltaY / rect.height) * vb.height;
+
+  vb.x = panStartVbX + worldDeltaX;
+  vb.y = panStartVbY + worldDeltaY;
+});
+
+document.addEventListener("mouseup", () => {
+  isPanning = false;
+  svg.style.cursor = "grab";
 });
 
 /* ---------------------------------------------------------------------- */

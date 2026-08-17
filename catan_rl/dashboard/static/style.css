@@ -141,6 +141,11 @@ html, body {
   min-height: 0;
   background: #0c2233;
   border-radius: 8px;
+  cursor: grab;
+}
+
+#board-svg:active {
+  cursor: grabbing;
 }
 
 #controls {
