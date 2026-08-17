@@ -142,16 +142,20 @@ function initReplay(data) {
   const nPlayers = (plies[0] && plies[0].state.players.length) || 4;
   seatNames = meta.seats || Array.from({ length: nPlayers }, (_, i) => `Player ${i}`);
 
-  // Debug: Log port information
+  // Debug: Log port information with distance info
   console.log("=== PORT DEBUG INFO ===");
   console.log(`Total vertices: ${geo.vertex_positions.length}`);
   console.log(`Total ports: ${board.ports.length}`);
+  console.log(`Board center: [${boardCenterX.toFixed(2)}, ${boardCenterY.toFixed(2)}]`);
   board.ports.forEach((port, idx) => {
     const [va, vb] = port.vertices;
     const pa = geo.vertex_positions[va];
     const pb = geo.vertex_positions[vb];
+    const distA = Math.sqrt((pa[0] - boardCenterX) ** 2 + (pa[1] - boardCenterY) ** 2);
+    const distB = Math.sqrt((pb[0] - boardCenterX) ** 2 + (pb[1] - boardCenterY) ** 2);
+    const pickedVid = distA > distB ? va : vb;
     const resource = port.resource === null ? "3:1" : ["wood", "brick", "sheep", "wheat", "ore"][port.resource];
-    console.log(`Port ${idx} (${resource}): vertices [${va}, ${vb}] at positions [${pa}] and [${pb}]`);
+    console.log(`Port ${idx} (${resource}): vertices [${va}@${distA.toFixed(2)}, ${vb}@${distB.toFixed(2)}] → using vertex ${pickedVid}`);
   });
 
   computeRollEvents();
@@ -226,9 +230,11 @@ function buildBoard() {
     }
   }
 
-  // Calculate board center once
-  const boardCenterX = geo.hex_centers.reduce((sum, c) => sum + c[0], 0) / geo.hex_centers.length;
-  const boardCenterY = geo.hex_centers.reduce((sum, c) => sum + c[1], 0) / geo.hex_centers.length;
+  // Calculate board center from playable hexes only (first 19), not water hexes
+  const playableHexCount = 19;
+  const playableHexCenters = geo.hex_centers.slice(0, playableHexCount);
+  const boardCenterX = playableHexCenters.reduce((sum, c) => sum + c[0], 0) / playableHexCount;
+  const boardCenterY = playableHexCenters.reduce((sum, c) => sum + c[1], 0) / playableHexCount;
 
   (board.ports || []).forEach((port) => {
     const [va, vb] = port.vertices;
