@@ -631,6 +631,38 @@ document.addEventListener("keydown", (e) => {
 });
 
 /* ---------------------------------------------------------------------- */
+/* SVG Zoom and Pan                                                       */
+/* ---------------------------------------------------------------------- */
+
+const svg = document.getElementById("board-svg");
+let scale = 1;
+const minScale = 0.5;
+const maxScale = 5;
+
+svg.addEventListener("wheel", (e) => {
+  if (document.getElementById("view-replay").hidden) return;
+  e.preventDefault();
+
+  const rect = svg.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
+
+  const oldScale = scale;
+  scale *= e.deltaY > 0 ? 0.9 : 1.1;
+  scale = Math.max(minScale, Math.min(maxScale, scale));
+
+  const vb = svg.viewBox.baseVal;
+  const newWidth = vb.width * (oldScale / scale);
+  const newHeight = vb.height * (oldScale / scale);
+
+  const scaleChange = (newWidth - vb.width) / 2;
+  vb.x += scaleChange * (mouseX / rect.width);
+  vb.y += scaleChange * (mouseY / rect.height);
+  vb.width = newWidth;
+  vb.height = newHeight;
+});
+
+/* ---------------------------------------------------------------------- */
 /* Boot                                                                   */
 /* ---------------------------------------------------------------------- */
 
