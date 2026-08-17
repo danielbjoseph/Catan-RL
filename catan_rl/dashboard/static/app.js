@@ -232,17 +232,34 @@ function buildBoard() {
     const [va, vb] = port.vertices;
     const pa = vp[va], pb = vp[vb];
 
-    // Find which vertex is furthest from board center (water hex vertex)
-    const distA = Math.sqrt((pa[0] - boardCenterX) ** 2 + (pa[1] - boardCenterY) ** 2);
-    const distB = Math.sqrt((pb[0] - boardCenterX) ** 2 + (pb[1] - boardCenterY) ** 2);
+    // Pick vertex that touches water hexes (IDs 19+)
+    const hexesA = geo.vertex_to_hexes ? geo.vertex_to_hexes[va] || [] : [];
+    const hexesB = geo.vertex_to_hexes ? geo.vertex_to_hexes[vb] || [] : [];
 
-    // Use the water hex vertex (further from center) as port position
-    const [px, py] = distA > distB ? pa : pb;
+    const hasWaterA = hexesA.some(h => h >= 19);
+    const hasWaterB = hexesB.some(h => h >= 19);
+
+    let pickedVid, px, py;
+    if (hasWaterA && !hasWaterB) {
+      pickedVid = va;
+      px = pa[0];
+      py = pa[1];
+    } else if (hasWaterB && !hasWaterA) {
+      pickedVid = vb;
+      px = pb[0];
+      py = pb[1];
+    } else {
+      // Both or neither touch water - use furthest from center as fallback
+      const distA = Math.sqrt((pa[0] - boardCenterX) ** 2 + (pa[1] - boardCenterY) ** 2);
+      const distB = Math.sqrt((pb[0] - boardCenterX) ** 2 + (pb[1] - boardCenterY) ** 2);
+      pickedVid = distA > distB ? va : vb;
+      px = distA > distB ? pa[0] : pb[0];
+      py = distA > distB ? pa[1] : pb[1];
+    }
 
     // Debug: Log which vertex was picked
-    const pickedVid = distA > distB ? va : vb;
     const resource = port.resource === null ? "3:1" : ["wood", "brick", "sheep", "wheat", "ore"][port.resource];
-    console.log(`Port ${idx} (${resource}): vertices [${va}@${distA.toFixed(2)}, ${vb}@${distB.toFixed(2)}] → using vertex ${pickedVid}`);
+    console.log(`Port ${idx} (${resource}): va=${va}(water=${hasWaterA}), vb=${vb}(water=${hasWaterB}) → using vertex ${pickedVid}`);
 
     // Draw dashed line from vertex va to port label (neutral color for all)
     const line1 = svgEl("line", {
