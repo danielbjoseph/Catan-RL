@@ -58,6 +58,9 @@ class TraceRecorder:
                 "hex_to_vertices": [
                     list(geo.hex_to_vertices[h]) for h in range(geo.n_hexes)
                 ],
+                "vertex_to_hexes": [
+                    list(geo.vertex_to_hexes[v]) for v in range(geo.n_vertices)
+                ],
             },
         }
         self._plies = []
