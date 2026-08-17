@@ -234,18 +234,12 @@ function buildBoard() {
     const [va, vb] = port.vertices;
     const pa = vp[va], pb = vp[vb];
 
-    // Port edge midpoint
-    const mx = (pa[0] + pb[0]) / 2;
-    const my = (pa[1] + pb[1]) / 2;
+    // Find which vertex is furthest from board center (water hex vertex)
+    const distA = Math.sqrt((pa[0] - boardCenterX) ** 2 + (pa[1] - boardCenterY) ** 2);
+    const distB = Math.sqrt((pb[0] - boardCenterX) ** 2 + (pb[1] - boardCenterY) ** 2);
 
-    // Direction from board center to edge midpoint
-    const dx = mx - boardCenterX;
-    const dy = my - boardCenterY;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-
-    // Normalize and apply small offset
-    const px = mx + (dx / dist) * 0.3;
-    const py = my + (dy / dist) * 0.3;
+    // Use the water hex vertex (further from center) as port position
+    const [px, py] = distA > distB ? pa : pb;
 
     // Draw dashed line from vertex va to port label (neutral color for all)
     const line1 = svgEl("line", {
