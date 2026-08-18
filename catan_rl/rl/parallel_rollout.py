@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -10,6 +12,7 @@ import numpy as np
 import torch
 
 from catan_rl.env.rules_profile import RulesProfile
+from catan_rl.rl.logger import StructuredLogger
 from catan_rl.rl.models import ActorCritic
 from catan_rl.rl.rollout import Batch, collect_rollouts
 
@@ -47,6 +50,7 @@ def _worker_collect_games(
     trace_prefix: str,
     opponents: Optional[Dict],
     n_policy_seats: int,
+    logger: Optional[dict] = None,
 ) -> Batch:
     """Collect games in a worker process.
 
@@ -73,10 +77,16 @@ def _worker_collect_games(
         trace_prefix: Prefix for trace filenames.
         opponents: Opponent pool specification (format: {"pool": [...]}).
         n_policy_seats: Number of seats controlled by the policy.
+        logger: Optional dict with 'run_id' and 'log_dir' to initialize logger in worker.
 
     Returns:
         A Batch containing the collected game data.
     """
+    # Initialize logger in this worker process
+    worker_logger = None
+    if logger is not None:
+        worker_logger = StructuredLogger(logger["run_id"], logger.get("log_dir"))
+
     # Derive per-worker seed deterministically from worker_id and seed_base.
     # The XOR with (worker_id * 0x12345) ensures different seeds for different workers.
     per_worker_seed = None if seed_base is None else seed_base ^ (worker_id * 0x12345)
@@ -86,6 +96,8 @@ def _worker_collect_games(
         np.random.seed(per_worker_seed)
         torch.manual_seed(per_worker_seed)
         torch.set_num_threads(1)  # Prevent oversubscription with N workers × N threads
+
+    start_time = time.time()
 
     # Collect rollouts for this worker, passing through all parameters.
     batch = collect_rollouts(
@@ -108,5 +120,17 @@ def _worker_collect_games(
         opponents=opponents,
         n_policy_seats=n_policy_seats,
     )
+
+    elapsed = time.time() - start_time
+
+    if worker_logger is not None:
+        worker_logger.log_event(
+            "rollout_complete",
+            worker_id=worker_id,
+            n_games=n_games,
+            batch_size=len(batch),
+            elapsed_sec=elapsed,
+            games_per_sec=n_games / elapsed if elapsed > 0 else 0,
+        )
 
     return batch
