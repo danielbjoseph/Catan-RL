@@ -2,6 +2,7 @@ import tempfile
 import json
 from pathlib import Path
 from catan_rl.rl.logger import StructuredLogger
+import torch
 
 def test_logger_single_process():
     """Test logger in single-process mode."""
@@ -81,3 +82,50 @@ def test_logger_env_var_detection():
             os.environ["WORLD_SIZE"] = original_world_size
         else:
             os.environ.pop("WORLD_SIZE", None)
+
+def test_ppo_trainer_logging():
+    """Test that PPO trainer logs metrics."""
+    from catan_rl.rl.ppo import PPOTrainer, PPOConfig
+    from catan_rl.rl.models import ActorCritic
+    from catan_rl.rl.logger import StructuredLogger
+    from catan_rl.rl.rollout import Batch
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        logger = StructuredLogger(run_id="test-ppo", log_dir=tmpdir)
+
+        # Create a minimal policy for testing
+        policy = ActorCritic(obs_dim=5, n_actions=3, hidden_sizes=(64,))
+        cfg = PPOConfig(lr=1e-4, epochs=1, minibatch_size=4)
+        trainer = PPOTrainer(policy, cfg, device="cpu", logger=logger)
+
+        # Create a minimal batch (5 samples)
+        batch = Batch(
+            obs=torch.randn(5, 5),
+            masks=torch.ones(5, 3, dtype=torch.bool),
+            actions=torch.randint(0, 3, (5,)),
+            logprobs=torch.randn(5),
+            values=torch.randn(5),
+            advantages=torch.randn(5),
+            returns=torch.randn(5),
+            seat_ids=torch.zeros(5, dtype=torch.long),
+            episode_ids=torch.zeros(5, dtype=torch.long),
+            stats={},
+        )
+
+        # Run one update
+        stats = trainer.update(batch)
+
+        # Check that metrics were logged
+        log_file = Path(tmpdir) / "rank-0.jsonl"
+        assert log_file.exists()
+
+        lines = log_file.read_text().strip().split("\n")
+        # Should have logs for each metric
+        metric_names = set()
+        for line in lines:
+            entry = json.loads(line)
+            if entry["type"] == "metric":
+                metric_names.add(entry["name"])
+
+        expected_metrics = {"policy_loss", "value_loss", "entropy", "approx_kl", "clip_fraction", "learning_rate"}
+        assert expected_metrics.issubset(metric_names)

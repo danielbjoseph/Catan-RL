@@ -16,6 +16,7 @@ from typing import Dict, Optional, Sequence, Union
 import torch
 import torch.nn as nn
 
+from .logger import StructuredLogger
 from .models import ActorCritic
 from .rollout import Batch
 
@@ -50,11 +51,13 @@ class PPOConfig:
 
 
 class PPOTrainer:
-    def __init__(self, policy: ActorCritic, cfg: PPOConfig, device: str = "cpu"):
+    def __init__(self, policy: ActorCritic, cfg: PPOConfig, device: str = "cpu", logger: Optional[StructuredLogger] = None):
         self.policy = policy.to(device)
         self.cfg = cfg
         self.device = device
         self.optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.lr, eps=1e-5)
+        self.logger = logger
+        self.update_step = 0
 
     def update(self, batch: Batch) -> Dict[str, float]:
         """One PPO update (cfg.epochs passes of minibatches) over the batch."""
@@ -128,7 +131,7 @@ class PPOTrainer:
         def _mean(xs):
             return float(sum(xs) / max(len(xs), 1))
 
-        return {
+        stats = {
             "policy_loss": _mean(policy_losses),
             "value_loss": _mean(value_losses),
             "entropy": _mean(entropies),
@@ -136,3 +139,10 @@ class PPOTrainer:
             "clip_fraction": _mean(clip_fracs),
             "learning_rate": self.optimizer.param_groups[0]["lr"],
         }
+
+        if self.logger is not None:
+            for name, value in stats.items():
+                self.logger.log_metric(name, value, step=self.update_step)
+            self.update_step += 1
+
+        return stats
