@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -33,7 +33,6 @@ class StructuredLogger:
 
         # Log file per rank
         self.log_file = self.log_dir / f"rank-{self.rank}.jsonl"
-        self._file_handle = None
 
     def _detect_rank(self) -> int:
         """Detect rank from Ray or torch.distributed environment."""
@@ -48,7 +47,10 @@ class StructuredLogger:
                 worker_id = os.environ.get("RAY_WORKER_ID")
                 if worker_id is not None:
                     # Simple mapping: worker ID to rank (0-indexed)
-                    return int(worker_id)
+                    try:
+                        return int(worker_id)
+                    except ValueError:
+                        pass
         except (ImportError, RuntimeError):
             pass
 
@@ -68,7 +70,10 @@ class StructuredLogger:
                 # Rough heuristic: total CPUs / CPUs per worker
                 num_workers = os.environ.get("RAY_NUM_WORKERS")
                 if num_workers is not None:
-                    return int(num_workers)
+                    try:
+                        return int(num_workers)
+                    except ValueError:
+                        pass
         except (ImportError, RuntimeError):
             pass
 
@@ -87,7 +92,7 @@ class StructuredLogger:
         """
         log_entry = {
             "type": "metric",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "rank": self.rank,
             "world_size": self.world_size,
             "name": name,
@@ -107,7 +112,7 @@ class StructuredLogger:
         """
         log_entry = {
             "type": "event",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "rank": self.rank,
             "world_size": self.world_size,
             "event_type": event_type,

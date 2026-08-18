@@ -51,3 +51,33 @@ def test_logger_default_log_dir():
         assert expected_path.exists()
     finally:
         shutil.rmtree("runs/test-default", ignore_errors=True)
+
+def test_logger_env_var_detection():
+    """Test rank/world_size detection from environment variables."""
+    import os
+    import tempfile
+    import shutil
+
+    # Save original env vars
+    original_rank = os.environ.get("RANK")
+    original_world_size = os.environ.get("WORLD_SIZE")
+
+    try:
+        os.environ["RANK"] = "2"
+        os.environ["WORLD_SIZE"] = "4"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            logger = StructuredLogger(run_id="test-env", log_dir=tmpdir)
+            assert logger.get_rank() == 2
+            assert logger.get_world_size() == 4
+    finally:
+        # Restore original env vars
+        if original_rank is not None:
+            os.environ["RANK"] = original_rank
+        else:
+            os.environ.pop("RANK", None)
+
+        if original_world_size is not None:
+            os.environ["WORLD_SIZE"] = original_world_size
+        else:
+            os.environ.pop("WORLD_SIZE", None)
