@@ -127,7 +127,7 @@ class LogAggregator:
 
     def get_metric_stats(
         self, metric_name: str, rank: Optional[int] = None
-    ) -> Dict[str, float]:
+    ) -> Dict[str, float | None | int]:
         """Get statistics (min, max, mean) for a metric.
 
         Args:
@@ -137,12 +137,8 @@ class LogAggregator:
         Returns:
             Dict with keys: min, max, mean, count.
         """
-        if rank is None:
-            metrics = self.get_metrics(rank=None)
-            values = metrics.get(metric_name, [])
-        else:
-            metrics = self.get_metrics(rank=rank)
-            values = metrics.get(metric_name, [])
+        metrics = self.get_metrics(rank=rank)
+        values = metrics.get(metric_name, [])
 
         if not values:
             return {"min": None, "max": None, "mean": None, "count": 0}
@@ -187,11 +183,19 @@ class LogAggregator:
             "event_type_counts": self.get_event_counts(rank=None),
         }
 
-        # Add metric stats for each metric
+        # Add metric stats for each metric (compute once without re-aggregating)
         all_metrics = self.get_metrics(rank=None)
         metric_stats = {}
-        for metric_name in sorted(all_metrics.keys()):
-            metric_stats[metric_name] = self.get_metric_stats(metric_name, rank=None)
+        for metric_name, values in sorted(all_metrics.items()):
+            if not values:
+                metric_stats[metric_name] = {"min": None, "max": None, "mean": None, "count": 0}
+            else:
+                metric_stats[metric_name] = {
+                    "min": min(values),
+                    "max": max(values),
+                    "mean": sum(values) / len(values),
+                    "count": len(values),
+                }
         summary["metric_stats"] = metric_stats
 
         return summary

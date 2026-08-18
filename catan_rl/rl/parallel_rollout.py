@@ -85,7 +85,10 @@ def _worker_collect_games(
     # Initialize logger in this worker process
     worker_logger = None
     if logger is not None:
-        worker_logger = StructuredLogger(logger["run_id"], logger.get("log_dir"))
+        try:
+            worker_logger = StructuredLogger(logger["run_id"], logger.get("log_dir"))
+        except (KeyError, TypeError):
+            worker_logger = None
 
     # Derive per-worker seed deterministically from worker_id and seed_base.
     # The XOR with (worker_id * 0x12345) ensures different seeds for different workers.
